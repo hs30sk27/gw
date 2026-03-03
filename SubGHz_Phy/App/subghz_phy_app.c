@@ -107,7 +107,7 @@ void SubghzApp_Init(void)
   Radio.Init(&RadioEvents);
 
   /* USER CODE BEGIN SubghzApp_Init_2 */
-
+  Radio.Sleep();
   /* USER CODE END SubghzApp_Init_2 */
 }
 
@@ -119,30 +119,36 @@ void SubghzApp_Init(void)
 static void OnTxDone(void)
 {
   /* USER CODE BEGIN OnTxDone */
+	GW_Radio_OnTxDone();
+
   /* USER CODE END OnTxDone */
 }
 
 static void OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t LoraSnr_FskCfo)
 {
   /* USER CODE BEGIN OnRxDone */
+	GW_Radio_OnRxDone(payload, size, rssi, LoraSnr_FskCfo);
   /* USER CODE END OnRxDone */
 }
 
 static void OnTxTimeout(void)
 {
   /* USER CODE BEGIN OnTxTimeout */
+	GW_Radio_OnTxTimeout();
   /* USER CODE END OnTxTimeout */
 }
 
 static void OnRxTimeout(void)
 {
   /* USER CODE BEGIN OnRxTimeout */
+	GW_Radio_OnRxTimeout();
   /* USER CODE END OnRxTimeout */
 }
 
 static void OnRxError(void)
 {
   /* USER CODE BEGIN OnRxError */
+	GW_Radio_OnRxError();
   /* USER CODE END OnRxError */
 }
 

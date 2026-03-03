@@ -22,10 +22,13 @@
 #include "stm32wlxx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "ui_hal_uart_dispatch.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
+extern void UI_Fault_CaptureHardFault(void);
+extern void UI_HAL_LPUART1_IrqDispatch(void);
 
 /* USER CODE END TD */
 
@@ -88,7 +91,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+    UI_Fault_CaptureHardFault();
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {

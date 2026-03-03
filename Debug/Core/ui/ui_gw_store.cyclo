@@ -1,0 +1,5 @@
+../Core/ui/ui_gw_store.c:19:6:UI_GW_STORE_Init	1
+../Core/ui/ui_gw_store.c:26:6:UI_GW_STORE_BeginCycle	2
+../Core/ui/ui_gw_store.c:42:6:UI_GW_STORE_OnNodeData	4
+../Core/ui/ui_gw_store.c:59:6:UI_GW_STORE_EndCycle	1
+../Core/ui/ui_gw_store.c:71:23:UI_GW_STORE_GetLastRecord	1
