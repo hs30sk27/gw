@@ -1,0 +1,5 @@
+../Core/gui/ui_core.c:37:13:prv_cmdrx_reset	1
+../Core/gui/ui_core.c:21:13:UI_Hook_OnOpKeyPressed	1
+../Core/gui/ui_core.c:135:13:UI_TaskMain	21
+../Core/gui/ui_core.c:188:6:UI_Core_ClearFlagsBeforeStop	1
+../Core/gui/ui_core.c:194:6:UI_Init	1

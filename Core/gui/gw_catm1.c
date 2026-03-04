@@ -22,6 +22,38 @@ static UI_RingBuf_t s_catm1_rb;
 static bool s_catm1_rb_ready = false;
 static volatile uint32_t s_catm1_last_rx_ms = 0u;
 
+#define UI_CATM1_TIME_DBG_RAW_LEN   96u
+#define UI_CATM1_TIME_DBG_MSG_LEN   320u
+
+typedef struct
+{
+    uint32_t seq;
+    uint32_t last_tick_ms;
+    uint8_t cclk_try_count;
+    uint8_t cclk_rsp_seen;
+    uint8_t cclk_valid;
+    uint8_t rtc_applied;
+    uint8_t time_valid_before;
+    uint8_t time_valid_after;
+    uint64_t rtc_before_centi;
+    uint64_t cclk_epoch_centi;
+    uint64_t rtc_after_centi;
+    char stage[24];
+    char cclk_raw[UI_CATM1_TIME_DBG_RAW_LEN];
+} GW_Catm1_TimeDbg_t;
+
+volatile GW_Catm1_TimeDbg_t g_gw_catm1_time_dbg;
+volatile char g_gw_catm1_time_dbg_buf[UI_CATM1_TIME_DBG_MSG_LEN];
+
+#define GW_CATM1_SNAPSHOT_TEXT_MAX  (4096u)
+#define GW_CATM1_TCP_CHUNK_MAX      (1024u)
+#define GW_CATM1_BACKLOG_MAX        (24u * 3u)
+
+static char s_catm1_payload_buf[GW_CATM1_SNAPSHOT_TEXT_MAX];
+
+volatile uint16_t g_gw_catm1_backlog_count = 0u;
+volatile uint32_t g_gw_catm1_backlog_drop_count = 0u;
+
 static void prv_catm1_rb_reset(void)
 {
     UI_RingBuf_Init(&s_catm1_rb, s_catm1_rb_mem, UI_CATM1_RX_RING_SIZE);
@@ -74,6 +106,157 @@ static bool prv_catm1_rb_pop_wait(uint8_t* out, uint32_t timeout_ms)
 static void prv_delay_ms(uint32_t ms)
 {
     HAL_Delay(ms);
+}
+
+static void prv_backlog_dbg_sync(void)
+{
+    g_gw_catm1_backlog_count = GW_Storage_TcpQueue_Count();
+    g_gw_catm1_backlog_drop_count = GW_Storage_TcpQueue_DropCount();
+}
+
+static void prv_backlog_push(const GW_HourRec_t* rec)
+{
+    GW_StorageRecRef_t ref;
+
+    if (rec == NULL)
+    {
+        return;
+    }
+
+    if (GW_Storage_FindRecordRefByEpoch(rec->epoch_sec, &ref))
+    {
+        (void)GW_Storage_TcpQueue_Push(&ref, GW_CATM1_BACKLOG_MAX);
+    }
+
+    prv_backlog_dbg_sync();
+}
+
+static bool prv_backlog_peek_oldest_at(uint16_t order, GW_HourRec_t* out)
+{
+    GW_StorageRecRef_t ref;
+
+    if ((out == NULL) || !GW_Storage_TcpQueue_Peek(order, &ref))
+    {
+        return false;
+    }
+
+    return GW_Storage_ReadHourRecByRef(&ref, out);
+}
+
+static void prv_backlog_pop_oldest_n(uint16_t count)
+{
+    (void)GW_Storage_TcpQueue_PopN(count);
+    prv_backlog_dbg_sync();
+}
+
+static void prv_time_dbg_copy_str(volatile char* dst, size_t dst_size, const char* src)
+{
+    size_t i;
+
+    if ((dst == NULL) || (dst_size == 0u))
+    {
+        return;
+    }
+
+    if (src == NULL)
+    {
+        src = "";
+    }
+
+    for (i = 0u; (i + 1u) < dst_size; i++)
+    {
+        if (src[i] == '\0')
+        {
+            break;
+        }
+        dst[i] = src[i];
+    }
+
+    dst[i] = '\0';
+}
+
+static void prv_time_dbg_format_epoch_text(uint64_t epoch_centi, bool valid, char* out, size_t out_size)
+{
+    UI_DateTime_t dt;
+
+    if ((out == NULL) || (out_size == 0u))
+    {
+        return;
+    }
+
+    if (!valid)
+    {
+        (void)snprintf(out, out_size, "N/A");
+        return;
+    }
+
+    memset(&dt, 0, sizeof(dt));
+    UI_Time_Epoch2016_ToCalendar((uint32_t)(epoch_centi / 100u), &dt);
+    (void)snprintf(out,
+                   out_size,
+                   "%04u-%02u-%02u %02u:%02u:%02u.%02u",
+                   (unsigned)dt.year,
+                   (unsigned)dt.month,
+                   (unsigned)dt.day,
+                   (unsigned)dt.hour,
+                   (unsigned)dt.min,
+                   (unsigned)dt.sec,
+                   (unsigned)(epoch_centi % 100u));
+}
+
+static void prv_time_dbg_refresh_buf(void)
+{
+    char before[32];
+    char cclk[32];
+    char after[32];
+
+    prv_time_dbg_format_epoch_text(g_gw_catm1_time_dbg.rtc_before_centi,
+                                   (g_gw_catm1_time_dbg.time_valid_before != 0u),
+                                   before,
+                                   sizeof(before));
+    prv_time_dbg_format_epoch_text(g_gw_catm1_time_dbg.cclk_epoch_centi,
+                                   (g_gw_catm1_time_dbg.cclk_valid != 0u),
+                                   cclk,
+                                   sizeof(cclk));
+    prv_time_dbg_format_epoch_text(g_gw_catm1_time_dbg.rtc_after_centi,
+                                   (g_gw_catm1_time_dbg.time_valid_after != 0u),
+                                   after,
+                                   sizeof(after));
+
+    (void)snprintf((char*)g_gw_catm1_time_dbg_buf,
+                   sizeof(g_gw_catm1_time_dbg_buf),
+                   "seq=%lu stage=%s tick=%lu try=%u rsp=%u valid=%u applied=%u before_valid=%u after_valid=%u before=%s cclk=%s after=%s raw=%s",
+                   (unsigned long)g_gw_catm1_time_dbg.seq,
+                   (const char*)g_gw_catm1_time_dbg.stage,
+                   (unsigned long)g_gw_catm1_time_dbg.last_tick_ms,
+                   (unsigned)g_gw_catm1_time_dbg.cclk_try_count,
+                   (unsigned)g_gw_catm1_time_dbg.cclk_rsp_seen,
+                   (unsigned)g_gw_catm1_time_dbg.cclk_valid,
+                   (unsigned)g_gw_catm1_time_dbg.rtc_applied,
+                   (unsigned)g_gw_catm1_time_dbg.time_valid_before,
+                   (unsigned)g_gw_catm1_time_dbg.time_valid_after,
+                   before,
+                   cclk,
+                   after,
+                   (const char*)g_gw_catm1_time_dbg.cclk_raw);
+}
+
+static void prv_time_dbg_set_stage(const char* stage)
+{
+    prv_time_dbg_copy_str(g_gw_catm1_time_dbg.stage, sizeof(g_gw_catm1_time_dbg.stage), stage);
+    g_gw_catm1_time_dbg.last_tick_ms = HAL_GetTick();
+    prv_time_dbg_refresh_buf();
+}
+
+static void prv_time_dbg_reset(void)
+{
+    uint32_t seq = g_gw_catm1_time_dbg.seq + 1u;
+
+    memset((void*)&g_gw_catm1_time_dbg, 0, sizeof(g_gw_catm1_time_dbg));
+    memset((void*)g_gw_catm1_time_dbg_buf, 0, sizeof(g_gw_catm1_time_dbg_buf));
+
+    g_gw_catm1_time_dbg.seq = seq;
+    prv_time_dbg_set_stage("RESET");
 }
 
 static bool prv_lpuart_is_inited(void)
@@ -456,6 +639,22 @@ static bool prv_wait_sim_ready(void)
     return (strstr(rsp, "+CPIN: READY") != NULL);
 }
 
+static void prv_enable_auto_time_update(void)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+
+    /* 내부 RTC 갱신용 자동 시간/타임존 업데이트 활성화.
+     * 지원/망 상태에 따라 바로 시간이 들어오지 않을 수 있으므로 세션 실패 조건으로는 보지 않는다. */
+    if (prv_send_cmd_wait("AT+CTZU=1\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)))
+    {
+        prv_time_dbg_set_stage("CTZU_OK");
+    }
+    else
+    {
+        prv_time_dbg_set_stage("CTZU_FAIL");
+    }
+}
+
 static bool prv_parse_cclk_epoch(const char* rsp, uint64_t* out_epoch_centi)
 {
     const char* p;
@@ -534,15 +733,32 @@ static bool prv_query_network_time_epoch(uint64_t* out_epoch_centi)
         return false;
     }
 
-    for (i = 0u; i < UI_CATM1_TIME_SYNC_RETRY; i++)
+    for (i = 0u; i < 2u; i++)
     {
-        if (prv_send_query_wait_prefix_ok("AT+CCLK?\r\n", "+CCLK:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
-            prv_parse_cclk_epoch(rsp, out_epoch_centi))
+        g_gw_catm1_time_dbg.cclk_try_count = (uint8_t)(i + 1u);
+        prv_time_dbg_set_stage("CCLK_WAIT");
+
+        if (!prv_send_query_wait_prefix_ok("AT+CCLK?\r\n", "+CCLK:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)))
         {
+            prv_time_dbg_set_stage("CCLK_TO");
+            prv_delay_ms(UI_CATM1_TIME_SYNC_GAP_MS);
+            continue;
+        }
+
+        g_gw_catm1_time_dbg.cclk_rsp_seen = 1u;
+        prv_time_dbg_copy_str(g_gw_catm1_time_dbg.cclk_raw, sizeof(g_gw_catm1_time_dbg.cclk_raw), rsp);
+
+        if (prv_parse_cclk_epoch(rsp, out_epoch_centi))
+        {
+            g_gw_catm1_time_dbg.cclk_valid = 1u;
+            g_gw_catm1_time_dbg.cclk_epoch_centi = *out_epoch_centi;
+            prv_time_dbg_set_stage("CCLK_VALID");
             return true;
         }
 
-        prv_delay_ms(UI_CATM1_TIME_SYNC_GAP_MS);
+        /* 응답은 받았지만 80/... 같은 무효 시간인 경우는 재조회 루프 없이 즉시 skip */
+        prv_time_dbg_set_stage("CCLK_INVALID");
+        return false;
     }
 
     return false;
@@ -552,12 +768,24 @@ static bool prv_sync_time_from_modem(void)
 {
     uint64_t epoch_centi = 0u;
 
+    g_gw_catm1_time_dbg.rtc_before_centi = UI_Time_NowCenti2016();
+    g_gw_catm1_time_dbg.time_valid_before = (uint8_t)(UI_Time_IsValid() ? 1u : 0u);
+    g_gw_catm1_time_dbg.rtc_after_centi = g_gw_catm1_time_dbg.rtc_before_centi;
+    g_gw_catm1_time_dbg.time_valid_after = g_gw_catm1_time_dbg.time_valid_before;
+    prv_time_dbg_set_stage("SYNC_BEGIN");
+
     if (!prv_query_network_time_epoch(&epoch_centi))
     {
+        prv_time_dbg_set_stage("SYNC_SKIP");
         return false;
     }
 
     UI_Time_SetEpochCenti2016(epoch_centi);
+
+    g_gw_catm1_time_dbg.rtc_applied = 1u;
+    g_gw_catm1_time_dbg.rtc_after_centi = UI_Time_NowCenti2016();
+    g_gw_catm1_time_dbg.time_valid_after = (uint8_t)(UI_Time_IsValid() ? 1u : 0u);
+    prv_time_dbg_set_stage("SYNC_APPLIED");
     return true;
 }
 
@@ -813,19 +1041,12 @@ static bool prv_query_caack_ok(uint16_t sent_len)
     return false;
 }
 
-static bool prv_send_tcp_payload(const char* payload)
+static bool prv_send_tcp_chunk(const uint8_t* payload, uint16_t len)
 {
     char cmd[48];
     char rsp[UI_CATM1_RX_BUF_SZ];
-    size_t len;
 
-    if (payload == NULL)
-    {
-        return false;
-    }
-
-    len = strlen(payload);
-    if ((len == 0u) || (len > 1460u))
+    if ((payload == NULL) || (len == 0u) || (len > 1460u))
     {
         return false;
     }
@@ -841,7 +1062,7 @@ static bool prv_send_tcp_payload(const char* payload)
         return false;
     }
 
-    if (!prv_uart_send_bytes(payload, (uint16_t)len, UI_CATM1_SEND_INPUT_TIMEOUT_MS + 2000u))
+    if (!prv_uart_send_bytes(payload, len, UI_CATM1_SEND_INPUT_TIMEOUT_MS + 2000u))
     {
         return false;
     }
@@ -851,7 +1072,32 @@ static bool prv_send_tcp_payload(const char* payload)
         return false;
     }
 
-    return prv_query_caack_ok((uint16_t)len);
+    return prv_query_caack_ok(len);
+}
+
+static bool prv_send_tcp_stream(const uint8_t* payload, size_t len)
+{
+    size_t offset = 0u;
+
+    if ((payload == NULL) || (len == 0u))
+    {
+        return false;
+    }
+
+    while (offset < len)
+    {
+        size_t remain = len - offset;
+        uint16_t chunk = (uint16_t)((remain > GW_CATM1_TCP_CHUNK_MAX) ? GW_CATM1_TCP_CHUNK_MAX : remain);
+
+        if (!prv_send_tcp_chunk(&payload[offset], chunk))
+        {
+            return false;
+        }
+
+        offset += chunk;
+    }
+
+    return true;
 }
 
 static bool prv_query_gnss_line(char* out, size_t out_sz)
@@ -903,6 +1149,7 @@ static bool prv_node_valid(const GW_NodeRec_t* r)
     }
     if (r->batt_lvl != UI_NODE_BATT_LVL_INVALID) { return true; }
     if (r->temp_c != UI_NODE_TEMP_INVALID_C) { return true; }
+    if (r->sensor_info != GW_NODE_SENSOR_INFO_INVALID) { return true; }
     if ((uint16_t)r->x != 0xFFFFu) { return true; }
     if ((uint16_t)r->y != 0xFFFFu) { return true; }
     if ((uint16_t)r->z != 0xFFFFu) { return true; }
@@ -911,29 +1158,14 @@ static bool prv_node_valid(const GW_NodeRec_t* r)
     return false;
 }
 
-static uint8_t prv_valid_node_count(const GW_HourRec_t* rec)
-{
-    uint8_t cnt = 0u;
-    uint32_t i;
-
-    for (i = 0u; i < UI_MAX_NODES; i++)
-    {
-        if (prv_node_valid(&rec->nodes[i]))
-        {
-            cnt++;
-        }
-    }
-    return cnt;
-}
-
-static void prv_append_fmt(char* out, size_t out_sz, size_t* io_len, const char* fmt, ...)
+static bool prv_append_fmt(char* out, size_t out_sz, size_t* io_len, const char* fmt, ...)
 {
     va_list ap;
     int n;
 
     if ((out == NULL) || (io_len == NULL) || (*io_len >= out_sz))
     {
-        return;
+        return false;
     }
 
     va_start(ap, fmt);
@@ -942,28 +1174,198 @@ static void prv_append_fmt(char* out, size_t out_sz, size_t* io_len, const char*
 
     if (n <= 0)
     {
-        return;
+        return false;
     }
 
     if ((size_t)n >= (out_sz - *io_len))
     {
         *io_len = out_sz - 1u;
         out[*io_len] = '\0';
-        return;
+        return false;
     }
 
     *io_len += (size_t)n;
+    return true;
 }
 
-static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, size_t out_sz)
+static uint16_t prv_crc16_ccitt(const uint8_t* data, size_t len, uint16_t init)
+{
+    uint16_t crc = init;
+    size_t i;
+
+    if (data == NULL)
+    {
+        return crc;
+    }
+
+    for (i = 0u; i < len; i++)
+    {
+        uint8_t bit;
+
+        crc ^= (uint16_t)((uint16_t)data[i] << 8);
+        for (bit = 0u; bit < 8u; bit++)
+        {
+            if ((crc & 0x8000u) != 0u)
+            {
+                crc = (uint16_t)((crc << 1) ^ UI_CRC16_POLY);
+            }
+            else
+            {
+                crc <<= 1;
+            }
+        }
+    }
+
+    return crc;
+}
+
+static char prv_batt_char_from_level(uint8_t batt_lvl)
+{
+    if (batt_lvl == UI_NODE_BATT_LVL_NORMAL)
+    {
+        return 'Y';
+    }
+    if (batt_lvl == UI_NODE_BATT_LVL_LOW)
+    {
+        return 'N';
+    }
+    return 'X';
+}
+
+static char prv_gw_batt_char(const GW_HourRec_t* rec)
+{
+    if (rec == NULL)
+    {
+        return 'X';
+    }
+    if (rec->gw_volt_x10 == 0xFFFFu)
+    {
+        return 'X';
+    }
+    return (rec->gw_volt_x10 < UI_NODE_BATT_LOW_THRESHOLD_X10) ? 'N' : 'Y';
+}
+
+static bool prv_try_round_gw_temp_to_c(const GW_HourRec_t* rec, int16_t* out_temp_c)
+{
+    int32_t temp_x10;
+
+    if ((rec == NULL) || (out_temp_c == NULL))
+    {
+        return false;
+    }
+
+    if ((uint16_t)rec->gw_temp_x10 == 0xFFFFu)
+    {
+        return false;
+    }
+
+    temp_x10 = rec->gw_temp_x10;
+    if (temp_x10 >= 0)
+    {
+        temp_x10 = (temp_x10 + 5) / 10;
+    }
+    else
+    {
+        temp_x10 = (temp_x10 - 5) / 10;
+    }
+
+    if ((temp_x10 < UI_NODE_TEMP_MIN_C) || (temp_x10 > UI_NODE_TEMP_MAX_C))
+    {
+        return false;
+    }
+
+    *out_temp_c = (int16_t)temp_x10;
+    return true;
+}
+
+static bool prv_sensor_info_valid(const GW_NodeRec_t* r)
+{
+    if (r == NULL)
+    {
+        return false;
+    }
+
+    return (r->sensor_info != GW_NODE_SENSOR_INFO_INVALID);
+}
+
+static bool prv_append_sensor_info_or_space(char* out, size_t out_sz, size_t* io_len, const GW_NodeRec_t* r)
+{
+    if (!prv_sensor_info_valid(r))
+    {
+        return prv_append_fmt(out, out_sz, io_len, " ");
+    }
+
+    return prv_append_fmt(out, out_sz, io_len, "%02X", (unsigned)(r->sensor_info & 0x1Fu));
+}
+
+static bool prv_append_value_or_x_i32(char* out, size_t out_sz, size_t* io_len, bool valid, int32_t value)
+{
+    if (!valid)
+    {
+        return prv_append_fmt(out, out_sz, io_len, "X");
+    }
+
+    return prv_append_fmt(out, out_sz, io_len, "%ld", (long)value);
+}
+
+static bool prv_append_value_or_x_u32(char* out, size_t out_sz, size_t* io_len, bool valid, uint32_t value)
+{
+    if (!valid)
+    {
+        return prv_append_fmt(out, out_sz, io_len, "X");
+    }
+
+    return prv_append_fmt(out, out_sz, io_len, "%lu", (unsigned long)value);
+}
+
+static uint8_t prv_snapshot_node_count(const GW_HourRec_t* rec)
+{
+    const UI_Config_t* cfg = UI_GetConfig();
+    uint8_t count = cfg->max_nodes;
+    uint8_t highest = 0u;
+    uint32_t i;
+
+    if (rec == NULL)
+    {
+        return 0u;
+    }
+
+    for (i = 0u; i < UI_MAX_NODES; i++)
+    {
+        if (prv_node_valid(&rec->nodes[i]))
+        {
+            highest = (uint8_t)(i + 1u);
+        }
+    }
+
+    if ((count == 0u) || (count > UI_MAX_NODES))
+    {
+        count = highest;
+    }
+
+    if (highest > count)
+    {
+        count = highest;
+    }
+
+    if (count > UI_MAX_NODES)
+    {
+        count = UI_MAX_NODES;
+    }
+
+    return count;
+}
+
+static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, uint32_t timestamp_sec, char* out, size_t out_sz)
 {
     const UI_Config_t* cfg = UI_GetConfig();
     UI_DateTime_t dt;
     size_t len = 0u;
+    uint8_t node_count;
     uint32_t i;
-    uint8_t valid_cnt;
-    bool truncated = false;
-    char set0, set1, set2;
+    int16_t gw_temp_c = 0;
+    bool gw_temp_valid;
+    uint16_t crc;
 
     if ((rec == NULL) || (out == NULL) || (out_sz < 64u))
     {
@@ -971,59 +1373,80 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
     }
 
     out[0] = '\0';
-    UI_Time_Epoch2016_ToCalendar(rec->epoch_sec, &dt);
-    valid_cnt = prv_valid_node_count(rec);
-    set0 = (char)cfg->setting_ascii[0];
-    set1 = (char)cfg->setting_ascii[1];
-    set2 = (char)cfg->setting_ascii[2];
-
-    prv_append_fmt(out, out_sz, &len,
-                   "DATA,GW:%u,NETID:%.*s,SET:%c%c%c,T:%04u-%02u-%02u %02u:%02u:%02u,GV:%u,GT:%d,N:%u\r\n",
-                   (unsigned)cfg->gw_num,
-                   (int)UI_NET_ID_LEN,
-                   (const char*)cfg->net_id,
-                   set0,
-                   set1,
-                   set2,
-                   (unsigned)dt.year,
-                   (unsigned)dt.month,
-                   (unsigned)dt.day,
-                   (unsigned)dt.hour,
-                   (unsigned)dt.min,
-                   (unsigned)dt.sec,
-                   (unsigned)rec->gw_volt_x10,
-                   (int)rec->gw_temp_x10,
-                   (unsigned)valid_cnt);
-
-    for (i = 0u; i < UI_MAX_NODES; i++)
+    if (timestamp_sec == 0u)
     {
-        const GW_NodeRec_t* r = &rec->nodes[i];
-        if (!prv_node_valid(r))
-        {
-            continue;
-        }
+        timestamp_sec = rec->epoch_sec;
+    }
+    UI_Time_Epoch2016_ToCalendar(timestamp_sec, &dt);
+    node_count = prv_snapshot_node_count(rec);
+    gw_temp_valid = prv_try_round_gw_temp_to_c(rec, &gw_temp_c);
 
-        if ((out_sz - len) < 96u)
-        {
-            truncated = true;
-            break;
-        }
-
-        prv_append_fmt(out, out_sz, &len,
-                       "ND:%02lu,B:%u,T:%d,X:%d,Y:%d,Z:%d,A:%u,P:%lu\r\n",
-                       (unsigned long)i,
-                       (unsigned)r->batt_lvl,
-                       (int)r->temp_c,
-                       (int)r->x,
-                       (int)r->y,
-                       (int)r->z,
-                       (unsigned)r->adc,
-                       (unsigned long)r->pulse_cnt);
+    if (!prv_append_fmt(out, out_sz, &len,
+                        "%04u-%02u-%02u %02u:%02u:%02u,%.*s,%u,%u,%c,",
+                        (unsigned)dt.year,
+                        (unsigned)dt.month,
+                        (unsigned)dt.day,
+                        (unsigned)dt.hour,
+                        (unsigned)dt.min,
+                        (unsigned)dt.sec,
+                        (int)UI_NET_ID_LEN,
+                        (const char*)cfg->net_id,
+                        (unsigned)cfg->gw_num,
+                        (unsigned)node_count,
+                        prv_gw_batt_char(rec)))
+    {
+        return 0u;
     }
 
-    if (truncated)
+    if (!prv_append_value_or_x_i32(out, out_sz, &len, gw_temp_valid, gw_temp_c))
     {
-        prv_append_fmt(out, out_sz, &len, "TRUNC:1\r\n");
+        return 0u;
+    }
+
+    for (i = 0u; i < node_count; i++)
+    {
+        const GW_NodeRec_t* r = &rec->nodes[i];
+        bool valid = prv_node_valid(r);
+
+        if (!prv_append_fmt(out, out_sz, &len, ",%c,", valid ? prv_batt_char_from_level(r->batt_lvl) : 'X'))
+        {
+            return 0u;
+        }
+
+        if (!prv_append_value_or_x_i32(out, out_sz, &len, valid && (r->temp_c != UI_NODE_TEMP_INVALID_C), r->temp_c))
+        {
+            return 0u;
+        }
+
+        if (!prv_append_fmt(out, out_sz, &len, ","))
+        {
+            return 0u;
+        }
+
+        if (!prv_append_sensor_info_or_space(out, out_sz, &len, valid ? r : NULL) ||
+            !prv_append_fmt(out, out_sz, &len, ","))
+        {
+            return 0u;
+        }
+
+        if (!prv_append_value_or_x_i32(out, out_sz, &len, valid && ((uint16_t)r->x != 0xFFFFu), r->x) ||
+            !prv_append_fmt(out, out_sz, &len, ",") ||
+            !prv_append_value_or_x_i32(out, out_sz, &len, valid && ((uint16_t)r->y != 0xFFFFu), r->y) ||
+            !prv_append_fmt(out, out_sz, &len, ",") ||
+            !prv_append_value_or_x_i32(out, out_sz, &len, valid && ((uint16_t)r->z != 0xFFFFu), r->z) ||
+            !prv_append_fmt(out, out_sz, &len, ",") ||
+            !prv_append_value_or_x_u32(out, out_sz, &len, valid && (r->adc != 0xFFFFu), r->adc) ||
+            !prv_append_fmt(out, out_sz, &len, ",") ||
+            !prv_append_value_or_x_u32(out, out_sz, &len, valid && (r->pulse_cnt != 0xFFFFFFFFu), r->pulse_cnt))
+        {
+            return 0u;
+        }
+    }
+
+    crc = prv_crc16_ccitt((const uint8_t*)out, len, UI_CRC16_INIT);
+    if (!prv_append_fmt(out, out_sz, &len, ",%04X\r\n", (unsigned)crc))
+    {
+        return 0u;
     }
 
     return len;
@@ -1060,6 +1483,7 @@ void GW_Catm1_Init(void)
 {
     /* 필요 시점에만 UART/전원을 올린다. */
     prv_catm1_rb_reset();
+    prv_backlog_dbg_sync();
 }
 
 void GW_Catm1_PowerOn(void)
@@ -1138,19 +1562,27 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec, bool include_daily_gnss)
 {
     uint8_t ip[4];
     uint16_t port;
-    char payload[UI_CATM1_SERVER_PAYLOAD_MAX + 1u];
     char gnss_line[256];
     char rsp[UI_CATM1_RX_BUF_SZ];
     bool success = false;
+    bool current_sent = false;
     bool opened = false;
     bool pdp_active = false;
-    size_t len;
+    uint16_t backlog_sent = 0u;
+    uint16_t backlog_count = 0u;
 
-    len = prv_build_snapshot_payload(rec, payload, sizeof(payload));
-    if (len == 0u)
+    if (rec == NULL)
     {
         return false;
     }
+
+    if (prv_build_snapshot_payload(rec, rec->epoch_sec, s_catm1_payload_buf, sizeof(s_catm1_payload_buf)) == 0u)
+    {
+        return false;
+    }
+
+    prv_time_dbg_reset();
+    prv_time_dbg_set_stage("SESSION_START");
 
     prv_get_server(ip, &port);
 
@@ -1175,9 +1607,8 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec, bool include_daily_gnss)
         goto cleanup;
     }
 
-    /* 런타임에서 CLTS=1 / CFUN=1,1을 강제로 수행하면 세션 도중 RDY 재부팅이 섞일 수 있다.
-     * 따라서 데이터 전송 경로에서는 모듈 재부팅을 유발하지 않고,
-     * 망 등록(EPS)과 PS attach가 성립한 뒤 CCLK?를 읽어 시간이 유효하면 반영한다. */
+    prv_enable_auto_time_update();
+
     if (!prv_wait_eps_registered())
     {
         goto cleanup;
@@ -1202,24 +1633,71 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec, bool include_daily_gnss)
     }
     opened = true;
 
-    if (!prv_send_tcp_payload(payload))
+    backlog_count = GW_Storage_TcpQueue_Count();
+    while (backlog_sent < backlog_count)
+    {
+        GW_HourRec_t old_rec;
+
+        if (!prv_backlog_peek_oldest_at(backlog_sent, &old_rec))
+        {
+            backlog_sent++;
+            continue;
+        }
+
+        if (prv_build_snapshot_payload(&old_rec, old_rec.epoch_sec, s_catm1_payload_buf, sizeof(s_catm1_payload_buf)) == 0u)
+        {
+            goto cleanup;
+        }
+
+        if (!prv_send_tcp_stream((const uint8_t*)s_catm1_payload_buf, strlen(s_catm1_payload_buf)))
+        {
+            goto cleanup;
+        }
+
+        backlog_sent++;
+    }
+
+    if (prv_build_snapshot_payload(rec, (UI_Time_IsValid() ? UI_Time_NowSec2016() : rec->epoch_sec), s_catm1_payload_buf, sizeof(s_catm1_payload_buf)) == 0u)
     {
         goto cleanup;
     }
 
+    if (!prv_send_tcp_stream((const uint8_t*)s_catm1_payload_buf, strlen(s_catm1_payload_buf)))
+    {
+        goto cleanup;
+    }
+    current_sent = true;
+
     if (include_daily_gnss && prv_query_gnss_line(gnss_line, sizeof(gnss_line)))
     {
-        (void)prv_send_tcp_payload(gnss_line);
+        (void)prv_send_tcp_stream((const uint8_t*)gnss_line, strlen(gnss_line));
     }
 
     success = true;
 
 cleanup:
+    if (backlog_sent != 0u)
+    {
+        prv_backlog_pop_oldest_n(backlog_sent);
+    }
+
+    if (!current_sent)
+    {
+        prv_backlog_push(rec);
+    }
+
     if (opened)
     {
         (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
     }
-    /* 세션 종료 후 모듈을 끌 것이므로 PDP deactivate는 생략한다. */
+    if (success)
+    {
+        prv_time_dbg_set_stage("SESSION_OK");
+    }
+    else
+    {
+        prv_time_dbg_set_stage("SESSION_FAIL");
+    }
     (void)pdp_active;
     GW_Catm1_PowerOff();
     prv_lpuart_release();

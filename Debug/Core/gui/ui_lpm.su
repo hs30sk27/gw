@@ -1,0 +1,9 @@
+../Core/gui/ui_lpm.c:66:13:prv_disable_uart_clock	0	static
+../Core/gui/ui_lpm.c:113:6:UI_LPM_Init	0	static
+../Core/gui/ui_lpm.c:119:6:UI_LPM_LockStop	0	static
+../Core/gui/ui_lpm.c:125:6:UI_LPM_UnlockStop	0	static
+../Core/gui/ui_lpm.c:138:6:UI_LPM_IsStopLocked	0	static
+../Core/gui/ui_lpm.c:143:6:UI_UART1_TxDma_DeInit	0	static
+../Core/gui/ui_lpm.c:155:6:UI_LPM_BeforeStop_DeInitPeripherals	16	static
+../Core/gui/ui_lpm.c:196:6:UI_LPM_AfterStop_ReInitPeripherals	0	static
+../Core/gui/ui_lpm.c:209:6:UI_LPM_EnterStopNow	8	static

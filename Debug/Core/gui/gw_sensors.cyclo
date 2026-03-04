@@ -1,0 +1,2 @@
+../Core/gui/gw_sensors.c:72:13:prv_adc_read.constprop	4
+../Core/gui/gw_sensors.c:143:6:GW_Sensors_MeasureGw	13

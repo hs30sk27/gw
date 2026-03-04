@@ -48,8 +48,30 @@
 #ifndef GW_STORAGE_MAX_FILES
 #define GW_STORAGE_MAX_FILES        (96u)
 #endif
+#ifndef GW_STORAGE_TCP_QUEUE_CAPACITY
+#define GW_STORAGE_TCP_QUEUE_CAPACITY (24u * 3u)
+#endif
+#define GW_STORAGE_TCP_QUEUE_PATH   "/tcpq.idx"
+#define GW_STORAGE_TCP_QUEUE_MAGIC  (0x54435131u) /* 'TCQ1' */
+#define GW_STORAGE_TCP_QUEUE_VER    (1u)
 
 #if (UI_USE_LITTLEFS == 1)
+typedef struct __attribute__((packed))
+{
+    uint32_t magic;
+    uint16_t version;
+    uint16_t count;
+    uint16_t head;
+    uint16_t reserved;
+    uint32_t drop_count;
+} GW_StorageTcpQueueHdr_t;
+
+typedef struct __attribute__((packed))
+{
+    GW_StorageTcpQueueHdr_t hdr;
+    GW_StorageRecRef_t items[GW_STORAGE_TCP_QUEUE_CAPACITY];
+} GW_StorageTcpQueueFile_t;
+
 static lfs_t s_lfs;
 static uint8_t s_lfs_read_buf[UI_W25Q128_CACHE_SIZE];
 static uint8_t s_lfs_prog_buf[UI_W25Q128_CACHE_SIZE];
@@ -185,6 +207,11 @@ static int32_t prv_day_index_from_name(const char* name)
 static int32_t prv_day_index_from_epoch(uint32_t epoch_sec)
 {
     return (int32_t)(epoch_sec / 86400u);
+}
+
+static uint32_t prv_day_epoch_from_epoch(uint32_t epoch_sec)
+{
+    return (epoch_sec / 86400u) * 86400u;
 }
 
 #if (UI_USE_LITTLEFS == 1)
@@ -376,6 +403,123 @@ static bool prv_stream_file(const GW_StorageFileInfo_t* info, uint32_t display_i
     (void)lfs_file_close(&s_lfs, &file);
     return true;
 }
+
+static void prv_tcp_queue_init(GW_StorageTcpQueueFile_t* q)
+{
+    if (q == NULL)
+    {
+        return;
+    }
+
+    memset(q, 0, sizeof(*q));
+    q->hdr.magic = GW_STORAGE_TCP_QUEUE_MAGIC;
+    q->hdr.version = GW_STORAGE_TCP_QUEUE_VER;
+}
+
+static bool prv_tcp_queue_ref_equal(const GW_StorageRecRef_t* a, const GW_StorageRecRef_t* b)
+{
+    if ((a == NULL) || (b == NULL))
+    {
+        return false;
+    }
+
+    return ((a->day_epoch_sec == b->day_epoch_sec) &&
+            (a->rec_index == b->rec_index));
+}
+
+static bool prv_tcp_queue_save(const GW_StorageTcpQueueFile_t* q)
+{
+    lfs_file_t file;
+    int rc;
+
+    if (q == NULL)
+    {
+        return false;
+    }
+
+    rc = lfs_file_open(&s_lfs,
+                       &file,
+                       GW_STORAGE_TCP_QUEUE_PATH,
+                       LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
+    if (rc != 0)
+    {
+        return false;
+    }
+
+    rc = (lfs_file_write(&s_lfs, &file, q, sizeof(*q)) == (lfs_ssize_t)sizeof(*q)) ? 0 : -1;
+    (void)lfs_file_sync(&s_lfs, &file);
+    (void)lfs_file_close(&s_lfs, &file);
+    return (rc == 0);
+}
+
+static bool prv_tcp_queue_load(GW_StorageTcpQueueFile_t* q, bool create_if_missing)
+{
+    lfs_file_t file;
+    int rc;
+
+    if (q == NULL)
+    {
+        return false;
+    }
+
+    prv_tcp_queue_init(q);
+
+    rc = lfs_file_open(&s_lfs, &file, GW_STORAGE_TCP_QUEUE_PATH, LFS_O_RDONLY);
+    if (rc != 0)
+    {
+        return create_if_missing ? prv_tcp_queue_save(q) : false;
+    }
+
+    rc = (lfs_file_read(&s_lfs, &file, q, sizeof(*q)) == (lfs_ssize_t)sizeof(*q)) ? 0 : -1;
+    (void)lfs_file_close(&s_lfs, &file);
+    if (rc != 0)
+    {
+        prv_tcp_queue_init(q);
+        return create_if_missing ? prv_tcp_queue_save(q) : false;
+    }
+
+    if ((q->hdr.magic != GW_STORAGE_TCP_QUEUE_MAGIC) ||
+        (q->hdr.version != GW_STORAGE_TCP_QUEUE_VER) ||
+        (q->hdr.head >= GW_STORAGE_TCP_QUEUE_CAPACITY) ||
+        (q->hdr.count > GW_STORAGE_TCP_QUEUE_CAPACITY))
+    {
+        prv_tcp_queue_init(q);
+        return create_if_missing ? prv_tcp_queue_save(q) : false;
+    }
+
+    return true;
+}
+
+static bool prv_tcp_queue_remove_day_inplace(GW_StorageTcpQueueFile_t* q, uint32_t day_epoch_sec)
+{
+    GW_StorageRecRef_t keep[GW_STORAGE_TCP_QUEUE_CAPACITY];
+    uint16_t kept = 0u;
+    uint16_t i;
+
+    if (q == NULL)
+    {
+        return false;
+    }
+
+    for (i = 0u; i < q->hdr.count; i++)
+    {
+        uint16_t idx = (uint16_t)((q->hdr.head + i) % GW_STORAGE_TCP_QUEUE_CAPACITY);
+        if (q->items[idx].day_epoch_sec != day_epoch_sec)
+        {
+            keep[kept++] = q->items[idx];
+        }
+    }
+
+    memset(q->items, 0, sizeof(q->items));
+    q->hdr.head = 0u;
+    q->hdr.count = kept;
+    for (i = 0u; i < kept; i++)
+    {
+        q->items[i] = keep[i];
+    }
+    return true;
+}
+
 #endif
 
 void GW_Storage_Init(void)
@@ -570,6 +714,11 @@ bool GW_Storage_DeleteAllFiles(void)
         (void)snprintf(path, sizeof(path), "/%s", items[i].name);
         (void)lfs_remove(&s_lfs, path);
     }
+    {
+        GW_StorageTcpQueueFile_t q;
+        prv_tcp_queue_init(&q);
+        (void)prv_tcp_queue_save(&q);
+    }
     prv_unmount_fs();
     return true;
 #else
@@ -583,6 +732,7 @@ bool GW_Storage_DeleteFileByIndex(uint16_t list_index_1based)
     GW_StorageFileInfo_t item;
     char path[80];
     bool ok = false;
+    int32_t day_index;
 
     if (!prv_mount_fs(false))
     {
@@ -592,11 +742,345 @@ bool GW_Storage_DeleteFileByIndex(uint16_t list_index_1based)
     {
         (void)snprintf(path, sizeof(path), "/%s", item.name);
         ok = (lfs_remove(&s_lfs, path) == 0);
+        if (ok)
+        {
+            day_index = prv_day_index_from_name(item.name);
+            if (day_index >= 0)
+            {
+                GW_StorageTcpQueueFile_t q;
+                if (prv_tcp_queue_load(&q, true))
+                {
+                    (void)prv_tcp_queue_remove_day_inplace(&q, (uint32_t)day_index * 86400u);
+                    (void)prv_tcp_queue_save(&q);
+                }
+            }
+        }
     }
     prv_unmount_fs();
     return ok;
 #else
     (void)list_index_1based;
+    return false;
+#endif
+}
+
+
+bool GW_Storage_FindRecordRefByEpoch(uint32_t epoch_sec, GW_StorageRecRef_t* out)
+{
+#if (UI_USE_LITTLEFS == 1)
+    char path[32];
+    lfs_file_t file;
+    GW_FileRec_t rec;
+    uint32_t rec_index = 0u;
+    uint32_t day_epoch_sec = prv_day_epoch_from_epoch(epoch_sec);
+    bool found = false;
+
+    if (out == NULL)
+    {
+        return false;
+    }
+
+    if (!prv_mount_fs(false))
+    {
+        return false;
+    }
+
+    prv_make_day_path(day_epoch_sec, path, sizeof(path));
+    if (lfs_file_open(&s_lfs, &file, path, LFS_O_RDONLY) == 0)
+    {
+        while (lfs_file_read(&s_lfs, &file, &rec, sizeof(rec)) == (lfs_ssize_t)sizeof(rec))
+        {
+            uint16_t crc = UI_CRC16_CCITT((const uint8_t*)&rec,
+                                          sizeof(rec) - sizeof(rec.crc16),
+                                          UI_CRC16_INIT);
+            if ((crc == rec.crc16) && (rec.epoch_sec == epoch_sec))
+            {
+                out->day_epoch_sec = day_epoch_sec;
+                out->rec_index = (uint16_t)rec_index;
+                out->reserved = 0u;
+                found = true;
+                break;
+            }
+            rec_index++;
+        }
+        (void)lfs_file_close(&s_lfs, &file);
+    }
+
+    prv_unmount_fs();
+    return found;
+#else
+    (void)epoch_sec;
+    (void)out;
+    return false;
+#endif
+}
+
+bool GW_Storage_ReadHourRecByRef(const GW_StorageRecRef_t* ref, GW_HourRec_t* out)
+{
+#if (UI_USE_LITTLEFS == 1)
+    char path[32];
+    lfs_file_t file;
+    GW_FileRec_t rec;
+    bool ok = false;
+
+    if ((ref == NULL) || (out == NULL))
+    {
+        return false;
+    }
+
+    if (!prv_mount_fs(false))
+    {
+        return false;
+    }
+
+    prv_make_day_path(ref->day_epoch_sec, path, sizeof(path));
+    if (lfs_file_open(&s_lfs, &file, path, LFS_O_RDONLY) == 0)
+    {
+        lfs_soff_t off = (lfs_soff_t)ref->rec_index * (lfs_soff_t)sizeof(GW_FileRec_t);
+        if ((lfs_file_seek(&s_lfs, &file, off, LFS_SEEK_SET) == off) &&
+            (lfs_file_read(&s_lfs, &file, &rec, sizeof(rec)) == (lfs_ssize_t)sizeof(rec)))
+        {
+            uint16_t crc = UI_CRC16_CCITT((const uint8_t*)&rec,
+                                          sizeof(rec) - sizeof(rec.crc16),
+                                          UI_CRC16_INIT);
+            if (crc == rec.crc16)
+            {
+                *out = rec.rec;
+                ok = true;
+            }
+        }
+        (void)lfs_file_close(&s_lfs, &file);
+    }
+
+    prv_unmount_fs();
+    return ok;
+#else
+    (void)ref;
+    (void)out;
+    return false;
+#endif
+}
+
+uint16_t GW_Storage_TcpQueue_Count(void)
+{
+#if (UI_USE_LITTLEFS == 1)
+    GW_StorageTcpQueueFile_t q;
+    uint16_t count = 0u;
+
+    if (!prv_mount_fs(false))
+    {
+        return 0u;
+    }
+
+    if (prv_tcp_queue_load(&q, true))
+    {
+        count = q.hdr.count;
+    }
+
+    prv_unmount_fs();
+    return count;
+#else
+    return 0u;
+#endif
+}
+
+uint32_t GW_Storage_TcpQueue_DropCount(void)
+{
+#if (UI_USE_LITTLEFS == 1)
+    GW_StorageTcpQueueFile_t q;
+    uint32_t drop_count = 0u;
+
+    if (!prv_mount_fs(false))
+    {
+        return 0u;
+    }
+
+    if (prv_tcp_queue_load(&q, true))
+    {
+        drop_count = q.hdr.drop_count;
+    }
+
+    prv_unmount_fs();
+    return drop_count;
+#else
+    return 0u;
+#endif
+}
+
+bool GW_Storage_TcpQueue_Push(const GW_StorageRecRef_t* ref, uint16_t max_keep)
+{
+#if (UI_USE_LITTLEFS == 1)
+    GW_StorageTcpQueueFile_t q;
+    uint16_t cap;
+    uint16_t i;
+    uint16_t tail;
+    bool ok;
+
+    if (ref == NULL)
+    {
+        return false;
+    }
+
+    if (!prv_mount_fs(true))
+    {
+        return false;
+    }
+
+    if (!prv_tcp_queue_load(&q, true))
+    {
+        prv_unmount_fs();
+        return false;
+    }
+
+    for (i = 0u; i < q.hdr.count; i++)
+    {
+        uint16_t idx = (uint16_t)((q.hdr.head + i) % GW_STORAGE_TCP_QUEUE_CAPACITY);
+        if (prv_tcp_queue_ref_equal(&q.items[idx], ref))
+        {
+            prv_unmount_fs();
+            return true;
+        }
+    }
+
+    cap = max_keep;
+    if ((cap == 0u) || (cap > GW_STORAGE_TCP_QUEUE_CAPACITY))
+    {
+        cap = GW_STORAGE_TCP_QUEUE_CAPACITY;
+    }
+
+    while (q.hdr.count >= cap)
+    {
+        q.hdr.head = (uint16_t)((q.hdr.head + 1u) % GW_STORAGE_TCP_QUEUE_CAPACITY);
+        q.hdr.count--;
+        q.hdr.drop_count++;
+    }
+
+    tail = (uint16_t)((q.hdr.head + q.hdr.count) % GW_STORAGE_TCP_QUEUE_CAPACITY);
+    q.items[tail] = *ref;
+    q.hdr.count++;
+
+    ok = prv_tcp_queue_save(&q);
+    prv_unmount_fs();
+    return ok;
+#else
+    (void)ref;
+    (void)max_keep;
+    return false;
+#endif
+}
+
+bool GW_Storage_TcpQueue_Peek(uint16_t order, GW_StorageRecRef_t* out)
+{
+#if (UI_USE_LITTLEFS == 1)
+    GW_StorageTcpQueueFile_t q;
+    bool ok = false;
+
+    if (out == NULL)
+    {
+        return false;
+    }
+
+    if (!prv_mount_fs(false))
+    {
+        return false;
+    }
+
+    if (prv_tcp_queue_load(&q, true) && (order < q.hdr.count))
+    {
+        uint16_t idx = (uint16_t)((q.hdr.head + order) % GW_STORAGE_TCP_QUEUE_CAPACITY);
+        *out = q.items[idx];
+        ok = true;
+    }
+
+    prv_unmount_fs();
+    return ok;
+#else
+    (void)order;
+    (void)out;
+    return false;
+#endif
+}
+
+bool GW_Storage_TcpQueue_PopN(uint16_t count)
+{
+#if (UI_USE_LITTLEFS == 1)
+    GW_StorageTcpQueueFile_t q;
+    bool ok;
+
+    if (!prv_mount_fs(true))
+    {
+        return false;
+    }
+
+    if (!prv_tcp_queue_load(&q, true))
+    {
+        prv_unmount_fs();
+        return false;
+    }
+
+    if (count >= q.hdr.count)
+    {
+        q.hdr.count = 0u;
+        q.hdr.head = 0u;
+    }
+    else
+    {
+        q.hdr.head = (uint16_t)((q.hdr.head + count) % GW_STORAGE_TCP_QUEUE_CAPACITY);
+        q.hdr.count = (uint16_t)(q.hdr.count - count);
+    }
+
+    ok = prv_tcp_queue_save(&q);
+    prv_unmount_fs();
+    return ok;
+#else
+    (void)count;
+    return false;
+#endif
+}
+
+bool GW_Storage_TcpQueue_Clear(void)
+{
+#if (UI_USE_LITTLEFS == 1)
+    GW_StorageTcpQueueFile_t q;
+    bool ok;
+
+    if (!prv_mount_fs(true))
+    {
+        return false;
+    }
+
+    prv_tcp_queue_init(&q);
+    ok = prv_tcp_queue_save(&q);
+    prv_unmount_fs();
+    return ok;
+#else
+    return false;
+#endif
+}
+
+
+bool GW_Storage_TcpQueue_RemoveDay(uint32_t day_epoch_sec)
+{
+#if (UI_USE_LITTLEFS == 1)
+    GW_StorageTcpQueueFile_t q;
+    bool ok;
+
+    if (!prv_mount_fs(true))
+    {
+        return false;
+    }
+    if (!prv_tcp_queue_load(&q, true))
+    {
+        prv_unmount_fs();
+        return false;
+    }
+
+    (void)prv_tcp_queue_remove_day_inplace(&q, day_epoch_sec);
+    ok = prv_tcp_queue_save(&q);
+    prv_unmount_fs();
+    return ok;
+#else
+    (void)day_epoch_sec;
     return false;
 #endif
 }
