@@ -1,0 +1,5 @@
+../Core/ui/ui_gw.c:185:13:handle_radio_event	304	static
+../Core/ui/ui_gw.c:118:13:maybe_send_beacon	48	static
+../Core/ui/ui_gw.c:77:6:UI_GW_RequestBeaconOnce	0	static
+../Core/ui/ui_gw.c:82:6:UI_GW_Init	8	static
+../Core/ui/ui_gw.c:240:6:UI_GW_Process	32	static
