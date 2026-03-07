@@ -47,7 +47,8 @@ Core/gui/ui_cmd.o: ../Core/gui/ui_cmd.c ../Core/gui/ui_cmd.h \
  ../Drivers/CMSIS/Include/cmsis_compiler.h ../Utilities/misc/stm32_mem.h \
  ../Utilities/misc/stm32_tiny_vsnprintf.h ../Core/Inc/utilities_def.h \
  ../Core/gui/ui_uart.h ../Core/gui/ui_time.h ../Core/gui/ui_ble.h \
- ../Core/gui/ui_fault.h ../Core/gui/gw_file_cmd.h
+ ../Core/gui/gw_file_cmd.h ../Core/gui/gw_catm1.h \
+ ../Core/gui/gw_storage.h
 ../Core/gui/ui_cmd.h:
 ../Core/gui/ui_types.h:
 ../Core/gui/ui_conf.h:
@@ -105,5 +106,6 @@ D:/work26/gw/Core/gui/ui_lpm.h:
 ../Core/gui/ui_uart.h:
 ../Core/gui/ui_time.h:
 ../Core/gui/ui_ble.h:
-../Core/gui/ui_fault.h:
 ../Core/gui/gw_file_cmd.h:
+../Core/gui/gw_catm1.h:
+../Core/gui/gw_storage.h:

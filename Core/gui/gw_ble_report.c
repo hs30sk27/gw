@@ -130,8 +130,8 @@ bool GW_BleReport_SendMinuteTestRecord(const GW_HourRec_t* rec)
                    (unsigned)valid_cnt);
     UI_UART_SendString(line);
 
-    prv_format_x10(vbuf, sizeof(vbuf), (int32_t)rec->gw_volt_x10, rec->gw_volt_x10 == 0xFFFFu);
-    prv_format_x10(tbuf, sizeof(tbuf), (int32_t)rec->gw_temp_x10, ((uint16_t)rec->gw_temp_x10) == 0xFFFFu);
+    prv_format_x10(vbuf, sizeof(vbuf), (int32_t)rec->gw_volt_x10, rec->gw_volt_x10 == 0xFFu);
+    prv_format_temp_c(tbuf, sizeof(tbuf), rec->gw_temp_c);
 
     (void)snprintf(line, sizeof(line),
                    "GW,V:%s,T:%s\r\n",

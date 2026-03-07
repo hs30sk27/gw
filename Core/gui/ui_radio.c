@@ -3,7 +3,6 @@
 #include <stddef.h>
 
 #include "radio.h"
-#include "ui_fault.h"
 
 #ifndef UI_RF_LORA_BW_ENUM
 #define UI_RF_LORA_BW_ENUM            (0u)
@@ -51,15 +50,11 @@ static bool prv_prepare_common(uint8_t payload_len)
 {
     if ((Radio.SetChannel == NULL) || (Radio.Sleep == NULL))
     {
-        UI_FAULT_MARK("UI_RADIO_NULL",
-                      (Radio.SetChannel == NULL) ? 1u : 0u,
-                      (Radio.Sleep == NULL) ? 1u : 0u);
         return false;
     }
 
     if (s_recover_needed)
     {
-        UI_FAULT_MARK("UI_RADIO_REC", payload_len, 0u);
         Radio.Sleep();
         s_recover_needed = false;
     }
@@ -83,17 +78,12 @@ bool UI_Radio_PrepareTx(uint8_t payload_len)
 {
     if ((Radio.Send == NULL) || (Radio.SetTxConfig == NULL))
     {
-        UI_FAULT_MARK("UI_TXCFG_NULL",
-                      (Radio.Send == NULL) ? 1u : 0u,
-                      (Radio.SetTxConfig == NULL) ? 1u : 0u);
         return false;
     }
     if (!prv_prepare_common(payload_len))
     {
         return false;
     }
-
-    UI_FAULT_MARK("UI_TXCFG", payload_len, UI_RF_TX_OUTPUT_POWER_DBM);
     Radio.SetTxConfig(MODEM_LORA,
                       UI_RF_TX_OUTPUT_POWER_DBM,
                       0u,
@@ -114,17 +104,12 @@ bool UI_Radio_PrepareRx(uint8_t payload_len)
 {
     if ((Radio.Rx == NULL) || (Radio.SetRxConfig == NULL))
     {
-        UI_FAULT_MARK("UI_RXCFG_NULL",
-                      (Radio.Rx == NULL) ? 1u : 0u,
-                      (Radio.SetRxConfig == NULL) ? 1u : 0u);
         return false;
     }
     if (!prv_prepare_common(payload_len))
     {
         return false;
     }
-
-    UI_FAULT_MARK("UI_RXCFG", payload_len, UI_RF_LORA_SF);
     Radio.SetRxConfig(MODEM_LORA,
                       UI_RF_LORA_BW_ENUM,
                       UI_RF_LORA_SF,

@@ -47,9 +47,8 @@ Core/gui/gw_app.o: ../Core/gui/gw_app.c ../Core/gui/gw_app.h \
  ../Drivers/CMSIS/Include/cmsis_compiler.h ../Utilities/misc/stm32_mem.h \
  ../Utilities/misc/stm32_tiny_vsnprintf.h ../Core/Inc/utilities_def.h \
  ../Core/gui/ui_types.h ../Core/gui/ui_time.h ../Core/gui/ui_packets.h \
- ../Core/gui/ui_rf_plan_kr920.h ../Core/gui/ui_lpm.h ../Core/gui/ui_ble.h \
- ../Core/gui/ui_uart.h ../Core/gui/ui_fault.h ../Core/gui/ui_radio.h \
- ../Core/gui/gw_storage.h ../Core/gui/gw_ble_report.h \
+ ../Core/gui/ui_rf_plan_kr920.h ../Core/gui/ui_lpm.h \
+ ../Core/gui/ui_uart.h ../Core/gui/ui_radio.h ../Core/gui/gw_storage.h \
  ../Core/gui/gw_catm1.h ../Core/gui/gw_sensors.h \
  ../Utilities/timer/stm32_timer.h ../Utilities/sequencer/stm32_seq.h \
  ../Middlewares/Third_Party/SubGHz_Phy/radio.h \
@@ -114,12 +113,9 @@ D:/work26/gw/Core/gui/ui_lpm.h:
 ../Core/gui/ui_packets.h:
 ../Core/gui/ui_rf_plan_kr920.h:
 ../Core/gui/ui_lpm.h:
-../Core/gui/ui_ble.h:
 ../Core/gui/ui_uart.h:
-../Core/gui/ui_fault.h:
 ../Core/gui/ui_radio.h:
 ../Core/gui/gw_storage.h:
-../Core/gui/gw_ble_report.h:
 ../Core/gui/gw_catm1.h:
 ../Core/gui/gw_sensors.h:
 ../Utilities/timer/stm32_timer.h:

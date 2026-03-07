@@ -2,7 +2,6 @@
 #include "ui_conf.h"
 #include "ui_lpm.h"
 #include "ui_uart.h"
-#include "ui_fault.h"
 #include "gw_catm1.h"
 #include "stm32_timer.h"
 #include "stm32_seq.h"
@@ -11,7 +10,6 @@
 #include <string.h>
 
 extern UART_HandleTypeDef hlpuart1;
-
 
 /* -------------------------------------------------------------------------- */
 /* 내부 상태                                                                  */
@@ -142,8 +140,6 @@ static void prv_serial_init_after_ble_delay(void)
 {
     /* timer가 일찍 깨우거나, 다른 경로가 먼저 들어와도 BT_EN ON 후 10ms는 반드시 보장한다. */
     prv_wait_uart_guard_after_bt_on();
-    UI_FAULT_CP(UI_CP_BLE_UART_INIT, "BLE_UINIT", HAL_GetTick() - s_bt_on_tick_ms, 0u);
-    UI_Fault_Bp_BleUartInit();
     UI_UART_ReInit();
     prv_lpuart1_init_after_ble_delay();
     s_uart_init_pending = false;
@@ -152,8 +148,6 @@ static void prv_serial_init_after_ble_delay(void)
     HAL_Delay(UI_BLE_AT_CMD_DELAY_MS);
     if (s_ble_active)
     {
-        UI_FAULT_CP(UI_CP_BLE_AT_RESET, "BLE_ATCMD", HAL_GetTick() - s_bt_on_tick_ms, 0u);
-        UI_Fault_Bp_BleAtReset();
         UI_UART_SendString(UI_BLE_AT_CMD);
     }
 #endif
@@ -186,7 +180,6 @@ void UI_BLE_Process(void)
     /* (1) BLE END 등: 즉시 stop 요청이 최우선 */
     if ((ev & BLE_EVT_STOP_REQ) != 0u)
     {
-        UI_FAULT_CP(UI_CP_BLE_DISABLE, "BLE_STOP", 0u, 0u);
         UI_BLE_Disable();
         UI_LPM_EnterStopNow();
         return;
@@ -195,7 +188,6 @@ void UI_BLE_Process(void)
     /* (2) 3분 타임아웃: BLE OFF 후 stop mode 진입 */
     if ((ev & BLE_EVT_TIMEOUT) != 0u)
     {
-        UI_FAULT_CP(UI_CP_BLE_TIMEOUT, "BLE_TO", 0u, 0u);
         UI_BLE_Disable();
         UI_LPM_EnterStopNow();
         /* 다른 이벤트(LED 정리 등)도 처리할 수 있으므로 return 하지 않음 */
@@ -209,7 +201,6 @@ void UI_BLE_Process(void)
             prv_serial_init_after_ble_delay();
         }
     }
-
 
     /* (4) LED0 blink step */
     if ((ev & BLE_EVT_LED_STEP) != 0u)
@@ -238,7 +229,6 @@ static void UI_BLE_Task(void)
     /* 멀티 task 모드에서만 등록/호출됨. 단일 모드에서도 안전하게 남겨둠 */
     UI_BLE_Process();
 }
-
 
 void UI_BLE_Init(void)
 {
@@ -285,8 +275,6 @@ void UI_BLE_EnableForMs(uint32_t duration_ms)
         prv_serial_prepare_for_ble_on();
 
         /* HW ON */
-        UI_FAULT_CP(UI_CP_BLE_ENABLE, "BLE_ON", duration_ms, 0u);
-        UI_Fault_Bp_BleBtOn();
         prv_hw_set_bt(true);
         s_bt_on_tick_ms = HAL_GetTick();
 
@@ -303,7 +291,6 @@ void UI_BLE_EnableForMs(uint32_t duration_ms)
     }
 
     /* timeout 재설정(현재 시점부터 duration_ms) */
-    UI_FAULT_CP(UI_CP_BLE_DISABLE, "BLE_OFF", s_evt_flags, 0u);
     (void)UTIL_TIMER_Stop(&s_tmr_timeout);
     (void)UTIL_TIMER_SetPeriod(&s_tmr_timeout, duration_ms);
     (void)UTIL_TIMER_Start(&s_tmr_timeout);

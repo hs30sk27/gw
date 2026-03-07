@@ -1,3 +1,2 @@
 ../Core/gui/gw_ble_report.c:10:13:prv_node_valid	8
-../Core/gui/gw_ble_report.c:42:13:prv_format_x10.part.0.constprop	2
 ../Core/gui/gw_ble_report.c:98:6:GW_BleReport_SendMinuteTestRecord	10

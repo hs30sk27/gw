@@ -46,8 +46,8 @@ Core/gui/ui_uart.o: ../Core/gui/ui_uart.c ../Core/gui/ui_uart.h \
  ../Core/Inc/utilities_conf.h ../Drivers/CMSIS/Include/cmsis_compiler.h \
  ../Utilities/misc/stm32_mem.h ../Utilities/misc/stm32_tiny_vsnprintf.h \
  ../Core/Inc/utilities_def.h ../Core/gui/ui_ble.h \
- ../Core/gui/ui_ringbuf.h ../Core/gui/ui_fault.h \
- ../Utilities/sequencer/stm32_seq.h ../Utilities/timer/stm32_timer.h
+ ../Core/gui/ui_ringbuf.h ../Utilities/sequencer/stm32_seq.h \
+ ../Utilities/timer/stm32_timer.h
 ../Core/gui/ui_uart.h:
 ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal.h:
 ../Core/Inc/stm32wlxx_hal_conf.h:
@@ -103,6 +103,5 @@ D:/work26/gw/Core/gui/ui_lpm.h:
 ../Core/Inc/utilities_def.h:
 ../Core/gui/ui_ble.h:
 ../Core/gui/ui_ringbuf.h:
-../Core/gui/ui_fault.h:
 ../Utilities/sequencer/stm32_seq.h:
 ../Utilities/timer/stm32_timer.h:

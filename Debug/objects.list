@@ -22,7 +22,6 @@
 "./Core/gui/ui_config.o"
 "./Core/gui/ui_core.o"
 "./Core/gui/ui_crc16.o"
-"./Core/gui/ui_fault.o"
 "./Core/gui/ui_gpio.o"
 "./Core/gui/ui_hal_callbacks.o"
 "./Core/gui/ui_lpm.o"

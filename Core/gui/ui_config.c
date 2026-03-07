@@ -1,60 +1,55 @@
 /*
  * ui_config.c
  *
- * GW runtime config + MCU internal flash persistence.
- * Uses the last 2KB flash page at 0x0803F800.
+ * 설정값을 내부 Flash 마지막 페이지에 저장/복원한다.
+ * - power on 시 저장본이 유효하면 복원
+ * - 저장본이 없거나 CRC가 틀리면 default 사용
+ * - 명령으로 값이 바뀌면 상위(UI_CMD)에서 UI_Config_Save() 호출
  */
 
 #include "ui_types.h"
+#include "ui_crc16.h"
 #include "stm32wlxx_hal.h"
 #include <string.h>
+#include <stdbool.h>
+#include <stdio.h>
 
-#define UI_CFG_FLASH_ADDR            (0x0803F800u)
-#define UI_CFG_FLASH_PAGE_SIZE       (2048u)
-#define UI_CFG_MAGIC                 (0x55494346u) /* UICF */
-#define UI_CFG_VERSION               (2u)
+#define UI_CFG_FLASH_MAGIC              (0x55494346u) /* 'UICF' */
+#define UI_CFG_FLASH_VERSION            (0x0002u)
+#define UI_CFG_DEFAULT_GW_LAST_ND_NUM   (10u)
+#define UI_CFG_DEFAULT_LOC_ASCII        "0,0"
 
-typedef struct __attribute__((packed))
+#ifndef UI_CFG_FLASH_FALLBACK_SIZE_BYTES
+#define UI_CFG_FLASH_FALLBACK_SIZE_BYTES (256u * 1024u)
+#endif
+
+#ifndef UI_CFG_FLASH_PAGE_SIZE_BYTES
+#if defined(FLASH_PAGE_SIZE)
+#define UI_CFG_FLASH_PAGE_SIZE_BYTES    (FLASH_PAGE_SIZE)
+#else
+#define UI_CFG_FLASH_PAGE_SIZE_BYTES    (2048u)
+#endif
+#endif
+
+typedef struct
 {
     uint32_t    magic;
     uint16_t    version;
-    uint16_t    size;
+    uint16_t    cfg_len;
     UI_Config_t cfg;
-    uint32_t    crc32;
-} UI_ConfigFlash_t;
+    uint16_t    crc16;
+    uint16_t    reserved;
+} UI_ConfigFlashRec_t;
+
+typedef union
+{
+    UI_ConfigFlashRec_t rec;
+    uint8_t  bytes[((sizeof(UI_ConfigFlashRec_t) + 7u) / 8u) * 8u];
+    uint64_t qwords[((sizeof(UI_ConfigFlashRec_t) + 7u) / 8u)];
+} UI_ConfigFlashImage_t;
 
 static UI_Config_t s_cfg;
-static uint8_t s_inited = 0u;
-
-static uint32_t prv_crc32(const uint8_t* data, uint32_t len)
-{
-    uint32_t crc = 0xFFFFFFFFu;
-    uint32_t i;
-    uint32_t j;
-
-    if (data == NULL)
-    {
-        return 0u;
-    }
-
-    for (i = 0u; i < len; i++)
-    {
-        crc ^= (uint32_t)data[i];
-        for (j = 0u; j < 8u; j++)
-        {
-            if ((crc & 1u) != 0u)
-            {
-                crc = (crc >> 1u) ^ 0xEDB88320u;
-            }
-            else
-            {
-                crc >>= 1u;
-            }
-        }
-    }
-
-    return ~crc;
-}
+static bool s_inited = false;
 
 static void prv_set_setting_ascii(uint8_t value, char unit)
 {
@@ -63,8 +58,81 @@ static void prv_set_setting_ascii(uint8_t value, char unit)
     s_cfg.setting_ascii[2] = (uint8_t)unit;
 }
 
-static void prv_apply_limits(void)
+static void prv_init_defaults(void)
 {
+    memset(&s_cfg, 0, sizeof(s_cfg));
+
+    memcpy(s_cfg.net_id, "ABCD123456", UI_NET_ID_LEN);
+
+    s_cfg.gw_num    = 0u;
+    /* GW의 ND NUM은 0-based 마지막 ND 번호를 의미하므로
+     * default ND NUM:10 -> 내부 RX slot 수/최대 노드 수는 11 */
+    s_cfg.max_nodes = (uint8_t)(UI_CFG_DEFAULT_GW_LAST_ND_NUM + 1u);
+    s_cfg.node_num  = 0u;
+
+    s_cfg.setting_value = 1u;
+    s_cfg.setting_unit  = 'H';
+    prv_set_setting_ascii(s_cfg.setting_value, s_cfg.setting_unit);
+
+    s_cfg.tcpip_ip[0] = UI_TCPIP_DEFAULT_IP0;
+    s_cfg.tcpip_ip[1] = UI_TCPIP_DEFAULT_IP1;
+    s_cfg.tcpip_ip[2] = UI_TCPIP_DEFAULT_IP2;
+    s_cfg.tcpip_ip[3] = UI_TCPIP_DEFAULT_IP3;
+    s_cfg.tcpip_port  = UI_TCPIP_DEFAULT_PORT;
+
+    (void)snprintf(s_cfg.loc_ascii, sizeof(s_cfg.loc_ascii), "%s", UI_CFG_DEFAULT_LOC_ASCII);
+    s_cfg.loc_ascii[UI_LOC_ASCII_MAX - 1u] = '\0';
+}
+
+static uint32_t prv_flash_total_bytes(void)
+{
+#if defined(FLASHSIZE_BASE)
+    uint32_t kb = (uint32_t)(*((const uint16_t*)FLASHSIZE_BASE));
+    if ((kb == 0u) || (kb == 0xFFFFu))
+    {
+        return UI_CFG_FLASH_FALLBACK_SIZE_BYTES;
+    }
+    return kb * 1024u;
+#else
+    return UI_CFG_FLASH_FALLBACK_SIZE_BYTES;
+#endif
+}
+
+static uint32_t prv_flash_cfg_addr(void)
+{
+    uint32_t total_bytes = prv_flash_total_bytes();
+    return FLASH_BASE + total_bytes - UI_CFG_FLASH_PAGE_SIZE_BYTES;
+}
+
+static uint32_t prv_flash_page_from_addr(uint32_t addr)
+{
+    return (addr - FLASH_BASE) / UI_CFG_FLASH_PAGE_SIZE_BYTES;
+}
+
+static uint32_t prv_flash_bank_from_addr(uint32_t addr)
+{
+#if defined(FLASH_BANK_SIZE) && defined(FLASH_BANK_2)
+    if (addr >= (FLASH_BASE + FLASH_BANK_SIZE))
+    {
+        return FLASH_BANK_2;
+    }
+#endif
+#if defined(FLASH_BANK_1)
+    (void)addr;
+    return FLASH_BANK_1;
+#else
+    (void)addr;
+    return 0u;
+#endif
+}
+
+static void prv_sanitize_cfg(void)
+{
+    if (s_cfg.gw_num > 2u)
+    {
+        s_cfg.gw_num = 2u;
+    }
+
     if (s_cfg.max_nodes < 1u)
     {
         s_cfg.max_nodes = 1u;
@@ -73,101 +141,129 @@ static void prv_apply_limits(void)
     {
         s_cfg.max_nodes = UI_MAX_NODES;
     }
+
     if (s_cfg.node_num >= UI_MAX_NODES)
     {
         s_cfg.node_num = (UI_MAX_NODES - 1u);
     }
+
     if (s_cfg.setting_value > 99u)
     {
         s_cfg.setting_value = 99u;
     }
-    if ((s_cfg.setting_unit != 'M') && (s_cfg.setting_unit != 'H'))
+    /* legacy 00H / invalid unit는 새 기본값 01H로 정규화 */
+    if ((s_cfg.setting_value == 0u) || ((s_cfg.setting_unit != 'M') && (s_cfg.setting_unit != 'H')))
     {
         s_cfg.setting_unit = 'H';
+        s_cfg.setting_value = 1u;
     }
+
     if (s_cfg.tcpip_port < UI_TCPIP_MIN_PORT)
     {
-        s_cfg.tcpip_ip[0] = UI_TCPIP_DEFAULT_IP0;
-        s_cfg.tcpip_ip[1] = UI_TCPIP_DEFAULT_IP1;
-        s_cfg.tcpip_ip[2] = UI_TCPIP_DEFAULT_IP2;
-        s_cfg.tcpip_ip[3] = UI_TCPIP_DEFAULT_IP3;
         s_cfg.tcpip_port = UI_TCPIP_DEFAULT_PORT;
     }
+
+    if (s_cfg.loc_ascii[0] == '\0')
+    {
+        (void)snprintf(s_cfg.loc_ascii, sizeof(s_cfg.loc_ascii), "%s", UI_CFG_DEFAULT_LOC_ASCII);
+    }
+    s_cfg.loc_ascii[UI_LOC_ASCII_MAX - 1u] = '\0';
     prv_set_setting_ascii(s_cfg.setting_value, s_cfg.setting_unit);
 }
 
-static void prv_init_defaults(void)
+static uint16_t prv_cfg_crc16(const UI_Config_t* cfg)
 {
+    return UI_CRC16_CCITT((const uint8_t*)cfg, sizeof(*cfg), UI_CRC16_INIT);
+}
+
+static bool prv_flash_rec_is_valid(const UI_ConfigFlashRec_t* rec)
+{
+    uint16_t crc;
+
+    if (rec == NULL)
+    {
+        return false;
+    }
+
+    if (rec->magic != UI_CFG_FLASH_MAGIC)
+    {
+        return false;
+    }
+    if (rec->version != UI_CFG_FLASH_VERSION)
+    {
+        return false;
+    }
+    if (rec->cfg_len != (uint16_t)sizeof(UI_Config_t))
+    {
+        return false;
+    }
+
+    crc = prv_cfg_crc16(&rec->cfg);
+    if (crc != rec->crc16)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static bool prv_load_from_flash(void)
+{
+    const UI_ConfigFlashRec_t* rec = (const UI_ConfigFlashRec_t*)prv_flash_cfg_addr();
+
+    if (!prv_flash_rec_is_valid(rec))
+    {
+        return false;
+    }
+
+    memcpy(&s_cfg, &rec->cfg, sizeof(s_cfg));
+    prv_sanitize_cfg();
+    return true;
+}
+
+const UI_Config_t* UI_GetConfig(void)
+{
+    if (!s_inited)
+    {
+        prv_init_defaults();
+        (void)prv_load_from_flash();
+        s_inited = true;
+    }
+    return &s_cfg;
+}
+
+bool UI_Config_Save(void)
+{
+    UI_ConfigFlashImage_t img;
+    uint32_t addr;
+    uint32_t page_error = 0u;
+    HAL_StatusTypeDef st;
+    FLASH_EraseInitTypeDef erase = {0};
     uint32_t i;
 
-    memset(&s_cfg, 0, sizeof(s_cfg));
-    for (i = 0u; i < UI_NET_ID_LEN; i++)
-    {
-        s_cfg.net_id[i] = (uint8_t)'0';
-    }
-    s_cfg.gw_num = 0u;
-    s_cfg.max_nodes = 50u;
-    s_cfg.node_num = 0u;
-    s_cfg.setting_value = 0u;
-    s_cfg.setting_unit = 'H';
-    s_cfg.tcpip_ip[0] = UI_TCPIP_DEFAULT_IP0;
-    s_cfg.tcpip_ip[1] = UI_TCPIP_DEFAULT_IP1;
-    s_cfg.tcpip_ip[2] = UI_TCPIP_DEFAULT_IP2;
-    s_cfg.tcpip_ip[3] = UI_TCPIP_DEFAULT_IP3;
-    s_cfg.tcpip_port = UI_TCPIP_DEFAULT_PORT;
-    s_cfg.gnss_lat_e7 = 0;
-    s_cfg.gnss_lon_e7 = 0;
-    prv_apply_limits();
-}
-
-static bool prv_flash_read(UI_ConfigFlash_t* out)
-{
-    const UI_ConfigFlash_t* p = (const UI_ConfigFlash_t*)UI_CFG_FLASH_ADDR;
-    uint32_t crc;
-
-    if (out == NULL)
-    {
-        return false;
-    }
-
-    memcpy(out, p, sizeof(*out));
-    if ((out->magic != UI_CFG_MAGIC) ||
-        (out->version != UI_CFG_VERSION) ||
-        (out->size != sizeof(UI_Config_t)))
-    {
-        return false;
-    }
-
-    crc = prv_crc32((const uint8_t*)&out->cfg, sizeof(out->cfg));
-    return (crc == out->crc32);
-}
-
-static bool prv_flash_write(void)
-{
-    UI_ConfigFlash_t img;
-    FLASH_EraseInitTypeDef erase;
-    uint32_t page_error = 0u;
-    uint32_t offset;
-    HAL_StatusTypeDef st;
+    (void)UI_GetConfig();
+    prv_sanitize_cfg();
 
     memset(&img, 0xFF, sizeof(img));
-    img.magic = UI_CFG_MAGIC;
-    img.version = UI_CFG_VERSION;
-    img.size = sizeof(UI_Config_t);
-    img.cfg = s_cfg;
-    img.crc32 = prv_crc32((const uint8_t*)&img.cfg, sizeof(img.cfg));
+    img.rec.magic   = UI_CFG_FLASH_MAGIC;
+    img.rec.version = UI_CFG_FLASH_VERSION;
+    img.rec.cfg_len = (uint16_t)sizeof(UI_Config_t);
+    memcpy(&img.rec.cfg, &s_cfg, sizeof(s_cfg));
+    img.rec.crc16   = prv_cfg_crc16(&img.rec.cfg);
+    img.rec.reserved = 0xFFFFu;
+
+    addr = prv_flash_cfg_addr();
 
     if (HAL_FLASH_Unlock() != HAL_OK)
     {
         return false;
     }
 
-    memset(&erase, 0, sizeof(erase));
     erase.TypeErase = FLASH_TYPEERASE_PAGES;
 #if defined(FLASH_BANK_1)
-    erase.Banks = FLASH_BANK_1;
+    erase.Banks = prv_flash_bank_from_addr(addr);
 #endif
-    erase.Page = (UI_CFG_FLASH_ADDR - FLASH_BASE) / UI_CFG_FLASH_PAGE_SIZE;
+    erase.Page = prv_flash_page_from_addr(addr);
     erase.NbPages = 1u;
 
     st = HAL_FLASHEx_Erase(&erase, &page_error);
@@ -177,12 +273,11 @@ static bool prv_flash_write(void)
         return false;
     }
 
-    for (offset = 0u; offset < sizeof(img); offset += 8u)
+    for (i = 0u; i < (uint32_t)(sizeof(img.qwords) / sizeof(img.qwords[0])); i++)
     {
-        uint64_t dw = 0xFFFFFFFFFFFFFFFFull;
-        uint32_t copy_len = ((sizeof(img) - offset) >= 8u) ? 8u : (sizeof(img) - offset);
-        memcpy(&dw, ((const uint8_t*)&img) + offset, copy_len);
-        st = HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, UI_CFG_FLASH_ADDR + offset, dw);
+        st = HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD,
+                               addr + (i * 8u),
+                               img.qwords[i]);
         if (st != HAL_OK)
         {
             (void)HAL_FLASH_Lock();
@@ -191,90 +286,67 @@ static bool prv_flash_write(void)
     }
 
     (void)HAL_FLASH_Lock();
-    return true;
-}
-
-static void prv_ensure_init(void)
-{
-    UI_ConfigFlash_t img;
-
-    if (s_inited != 0u)
-    {
-        return;
-    }
-
-    if (prv_flash_read(&img))
-    {
-        s_cfg = img.cfg;
-        prv_apply_limits();
-    }
-    else
-    {
-        prv_init_defaults();
-        (void)prv_flash_write();
-    }
-
-    s_inited = 1u;
-}
-
-const UI_Config_t* UI_GetConfig(void)
-{
-    prv_ensure_init();
-    return &s_cfg;
+    return prv_load_from_flash();
 }
 
 void UI_SetNetId(const uint8_t net_id_10[UI_NET_ID_LEN])
 {
-    prv_ensure_init();
     memcpy(s_cfg.net_id, net_id_10, UI_NET_ID_LEN);
-    (void)prv_flash_write();
 }
 
 void UI_SetGwNum(uint8_t gw_num)
 {
-    prv_ensure_init();
+    if (gw_num > 2u) { gw_num = 2u; }
     s_cfg.gw_num = gw_num;
-    (void)prv_flash_write();
 }
 
 void UI_SetMaxNodes(uint8_t max_nodes)
 {
-    prv_ensure_init();
+    if (max_nodes < 1u) { max_nodes = 1u; }
+    if (max_nodes > UI_MAX_NODES) { max_nodes = UI_MAX_NODES; }
     s_cfg.max_nodes = max_nodes;
-    prv_apply_limits();
-    (void)prv_flash_write();
 }
 
 void UI_SetNodeNum(uint8_t node_num)
 {
-    prv_ensure_init();
+    if (node_num >= UI_MAX_NODES) { node_num = (UI_MAX_NODES - 1u); }
     s_cfg.node_num = node_num;
-    prv_apply_limits();
-    (void)prv_flash_write();
 }
 
 void UI_SetSetting(uint8_t value, char unit)
 {
-    prv_ensure_init();
+    if (value > 99u) { value = 99u; }
+
+    if ((value == 0u) || ((unit != 'M') && (unit != 'H')))
+    {
+        unit = 'H';
+        value = 1u;
+    }
+
     s_cfg.setting_value = value;
-    s_cfg.setting_unit = unit;
-    prv_apply_limits();
-    (void)prv_flash_write();
+    s_cfg.setting_unit  = unit;
+    prv_set_setting_ascii(value, unit);
 }
 
 void UI_SetTcpIp(const uint8_t ip[4], uint16_t port)
 {
-    prv_ensure_init();
     memcpy(s_cfg.tcpip_ip, ip, 4u);
     s_cfg.tcpip_port = port;
-    prv_apply_limits();
-    (void)prv_flash_write();
 }
 
-void UI_SetGnssPosE7(int32_t lat_e7, int32_t lon_e7)
+void UI_SetLocAscii(const char* loc_ascii)
 {
-    prv_ensure_init();
-    s_cfg.gnss_lat_e7 = lat_e7;
-    s_cfg.gnss_lon_e7 = lon_e7;
-    (void)prv_flash_write();
+    if (loc_ascii == NULL)
+    {
+        s_cfg.loc_ascii[0] = '\0';
+        return;
+    }
+
+    (void)snprintf(s_cfg.loc_ascii, sizeof(s_cfg.loc_ascii), "%s", loc_ascii);
+    s_cfg.loc_ascii[UI_LOC_ASCII_MAX - 1u] = '\0';
+}
+
+const char* UI_GetLocAscii(void)
+{
+    return s_cfg.loc_ascii;
 }

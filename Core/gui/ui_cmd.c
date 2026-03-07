@@ -3,8 +3,9 @@
 #include "ui_uart.h"
 #include "ui_time.h"
 #include "ui_ble.h"
-#include "ui_fault.h"
 #include "gw_file_cmd.h"
+#include "gw_catm1.h"
+#include "gw_storage.h"
 
 #include "stm32wlxx_hal.h" /* __weak */
 #include <string.h>
@@ -77,12 +78,119 @@ static int prv_parse_u8_dec(const char* s, uint8_t* out)
     return cnt;
 }
 
+static bool prv_cmd_equals_relaxed(const char* s, const char* base)
+{
+    if ((s == NULL) || (base == NULL))
+    {
+        return false;
+    }
+
+    while (*base != '\0')
+    {
+        if (toupper((unsigned char)*s) != toupper((unsigned char)*base))
+        {
+            return false;
+        }
+        s++;
+        base++;
+    }
+
+    while ((*s == ' ') || (*s == '\t'))
+    {
+        s++;
+    }
+
+    if (*s == ':')
+    {
+        s++;
+        while (isspace((unsigned char)*s))
+        {
+            s++;
+        }
+    }
+
+    return (*s == '\0');
+}
+
+
+static bool prv_commit_config_changed(void)
+{
+    if (!UI_Config_Save())
+    {
+        prv_send_error();
+        return false;
+    }
+
+    prv_send_ok();
+    UI_Hook_OnConfigChanged();
+    return true;
+}
+
+static bool prv_commit_setting_changed(uint8_t value, char unit)
+{
+    if (!UI_Config_Save())
+    {
+        prv_send_error();
+        return false;
+    }
+
+    prv_send_ok();
+    UI_Hook_OnSettingChanged(value, unit);
+    return true;
+}
+
+static void prv_send_setting_read(void)
+{
+    const UI_Config_t* cfg = UI_GetConfig();
+    char netid[UI_NET_ID_LEN + 1u];
+    char line[256];
+
+    memcpy(netid, cfg->net_id, UI_NET_ID_LEN);
+    netid[UI_NET_ID_LEN] = '\0';
+
+    (void)snprintf(line, sizeof(line), "NETID:%s\r\n", netid);
+    UI_UART_SendString(line);
+
+    (void)snprintf(line, sizeof(line), "GW NUM:%u\r\n", cfg->gw_num);
+    UI_UART_SendString(line);
+
+    uint8_t last_nd_num = (cfg->max_nodes > 0u) ? (uint8_t)(cfg->max_nodes - 1u) : 0u;
+    (void)snprintf(line, sizeof(line), "ND NUM:%u\r\n", last_nd_num);
+    UI_UART_SendString(line);
+
+    (void)snprintf(line, sizeof(line), "SETTING:%c%c%c\r\n",
+                   (char)cfg->setting_ascii[0],
+                   (char)cfg->setting_ascii[1],
+                   (char)cfg->setting_ascii[2]);
+    UI_UART_SendString(line);
+
+    (void)snprintf(line, sizeof(line), "TCPIP:%u.%u.%u.%u:%u\r\n",
+                   cfg->tcpip_ip[0], cfg->tcpip_ip[1], cfg->tcpip_ip[2], cfg->tcpip_ip[3], cfg->tcpip_port);
+    UI_UART_SendString(line);
+
+    (void)snprintf(line, sizeof(line), "LOC:%s\r\n",
+                   (cfg->loc_ascii[0] != '\0') ? cfg->loc_ascii : "0,0");
+    UI_UART_SendString(line);
+}
+
+static void prv_store_loc_to_compat_storage(const char* raw_ascii)
+{
+    GW_LocRec_t rec;
+
+    if ((raw_ascii == NULL) || (raw_ascii[0] == '\0'))
+    {
+        return;
+    }
+
+    memset(&rec, 0, sizeof(rec));
+    rec.saved_epoch_sec = UI_Time_NowSec2016();
+    (void)snprintf(rec.line, sizeof(rec.line), "LOC:%s", raw_ascii);
+    (void)GW_Storage_SaveLocRec(&rec);
+}
+
 void UI_Cmd_ProcessLine(const char* line_in)
 {
     if (line_in == NULL) { return; }
-
-    /* 명령 수신 시 BLE 동작 시간이 3분 연장 (요구사항) */
-    UI_BLE_ExtendMs(UI_BLE_ACTIVE_MS);
 
     /* line_in은 상위에서 buffer를 넘겨주므로 안전하게 로컬 복사 */
     char line[UI_UART_LINE_MAX];
@@ -124,8 +232,16 @@ void UI_Cmd_ProcessLine(const char* line_in)
     const char* p = s;
     if (*p == '\0') { return; }
 
-    UI_Fault_MarkCmd(p);
-    UI_FAULT_MARK("CMD_RX", (uint32_t)(unsigned char)p[0], (uint32_t)strlen(p));
+    /* 요구사항: BLE active 연장은 유효한 <...> 프레임일 때만 수행 */
+    UI_BLE_ExtendMs(UI_BLE_ACTIVE_MS);
+
+    /* -------------------- SETTING READ ------------------ */
+    if (prv_cmd_equals_relaxed(p, "SETTING READ"))
+    {
+        prv_send_setting_read();
+        prv_send_ok();
+        return;
+    }
 
     /* -------------------- TIME CHECK -------------------- */
     if ((strcmp(p, "TIME CHECK") == 0) || (strcmp(p, "TIME CHECK:") == 0))
@@ -169,8 +285,7 @@ void UI_Cmd_ProcessLine(const char* line_in)
             net_id[i] = (uint8_t)id[i];
         }
         UI_SetNetId(net_id);
-        prv_send_ok();
-        UI_Hook_OnConfigChanged();
+        (void)prv_commit_config_changed();
         return;
     }
 
@@ -181,8 +296,7 @@ void UI_Cmd_ProcessLine(const char* line_in)
         if (prv_parse_u8_dec(p + 7, &gw) > 0)
         {
             UI_SetGwNum(gw);
-            prv_send_ok();
-            UI_Hook_OnConfigChanged();
+            (void)prv_commit_config_changed();
         }
         else
         {
@@ -195,15 +309,14 @@ void UI_Cmd_ProcessLine(const char* line_in)
     if (strncmp(p, "SETTING:", 8) == 0)
     {
         const char* q = p + 8;
-        /* 예: 01M, 1M, 10H */
         uint8_t v = 0;
-        int n = prv_parse_u8_dec(q, &v);
-        if (n <= 0)
+        int nn = prv_parse_u8_dec(q, &v);
+        if (nn <= 0)
         {
             prv_send_error();
             return;
         }
-        q += n;
+        q += nn;
         char unit = *q;
         if ((unit != 'M') && (unit != 'H'))
         {
@@ -211,9 +324,14 @@ void UI_Cmd_ProcessLine(const char* line_in)
             return;
         }
 
+        if (v == 0u)
+        {
+            prv_send_error();
+            return;
+        }
+
         UI_SetSetting(v, unit);
-        prv_send_ok();
-        UI_Hook_OnSettingChanged(v, unit);
+        (void)prv_commit_setting_changed(v, unit);
         return;
     }
 
@@ -224,7 +342,8 @@ void UI_Cmd_ProcessLine(const char* line_in)
         UI_Hook_OnBeaconOnceRequested();
         return;
     }
-    /* -------------------- ND NUM:xx ---------------------- */
+
+    /* -------------------- ND NUM:xx --------------------- */
     if (strncmp(p, "ND NUM:", 7) == 0)
     {
         uint8_t v = 0;
@@ -234,16 +353,16 @@ void UI_Cmd_ProcessLine(const char* line_in)
             return;
         }
 
-        /* GW: ND NUM:xx = 노드 최대 개수 설정 (1..50) */
-        if (v < 1u || v > UI_MAX_NODES)
+        /* GW: ND NUM:xx = 마지막 ND 번호(0-based).
+         * 예) ND NUM:0 -> RX 1 slot, ND NUM:4 -> RX 5 slots */
+        if (v >= UI_MAX_NODES)
         {
             prv_send_error();
             return;
         }
 
-        UI_SetMaxNodes(v);
-        prv_send_ok();
-        UI_Hook_OnConfigChanged();
+        UI_SetMaxNodes((uint8_t)(v + 1u));
+        (void)prv_commit_config_changed();
         return;
     }
 
@@ -264,8 +383,7 @@ void UI_Cmd_ProcessLine(const char* line_in)
         }
         uint8_t ip[4] = {(uint8_t)a,(uint8_t)b,(uint8_t)c,(uint8_t)d};
         UI_SetTcpIp(ip, (uint16_t)port);
-        prv_send_ok();
-        UI_Hook_OnConfigChanged();
+        (void)prv_commit_config_changed();
         return;
     }
 
@@ -311,6 +429,98 @@ void UI_Cmd_ProcessLine(const char* line_in)
         return;
     }
 
+    /* -------------------- LOC / READ LOC ---------------- */
+    /* GW 전용: <LOC:ASCII GNSS> 를 받으면 내부 Flash 설정에도 저장한다. */
+    if ((strncmp(p, "LOC:", 4) == 0) && (p[4] != '\0'))
+    {
+        char* raw_loc = (char*)prv_skip_spaces(p + 4);
+        prv_rstrip(raw_loc);
+        if (*raw_loc == '\0')
+        {
+            prv_send_error();
+            return;
+        }
+
+        UI_SetLocAscii(raw_loc);
+        prv_store_loc_to_compat_storage(raw_loc);
+        if (UI_Config_Save())
+        {
+            UI_UART_SendString("LOC:");
+            UI_UART_SendString(raw_loc);
+            UI_UART_SendString("\r\n");
+            prv_send_ok();
+        }
+        else
+        {
+            prv_send_error();
+        }
+        return;
+    }
+
+    if ((strcmp(p, "LOC") == 0) || (strcmp(p, "LOC:") == 0))
+    {
+        char loc_line[GW_LOC_LINE_MAX];
+        if (GW_Catm1_QueryAndStoreLoc(loc_line, sizeof(loc_line)))
+        {
+            char* raw_loc = (char*)loc_line;
+            if (strncmp(raw_loc, "LOC:", 4) == 0)
+            {
+                raw_loc += 4;
+            }
+            raw_loc = (char*)prv_skip_spaces(raw_loc);
+            prv_rstrip(raw_loc);
+            if (*raw_loc == '\0')
+            {
+                prv_send_error();
+                return;
+            }
+
+            UI_SetLocAscii(raw_loc);
+            prv_store_loc_to_compat_storage(raw_loc);
+            if (!UI_Config_Save())
+            {
+                prv_send_error();
+                return;
+            }
+            UI_UART_SendString("LOC:");
+            UI_UART_SendString(raw_loc);
+            UI_UART_SendString("\r\n");
+            prv_send_ok();
+        }
+        else
+        {
+            prv_send_error();
+        }
+        return;
+    }
+
+    if ((strcmp(p, "READ LOC") == 0) || (strcmp(p, "READ LOC:") == 0))
+    {
+        const UI_Config_t* cfg = UI_GetConfig();
+        if (cfg->loc_ascii[0] != '\0')
+        {
+            UI_UART_SendString("LOC:");
+            UI_UART_SendString(cfg->loc_ascii);
+            UI_UART_SendString("\r\n");
+            prv_send_ok();
+        }
+        else
+        {
+            GW_LocRec_t loc_rec;
+            if (GW_Storage_ReadLocRec(&loc_rec) && (loc_rec.line[0] != '\0'))
+            {
+                UI_UART_SendString(loc_rec.line);
+                UI_UART_SendString("\r\n");
+                prv_send_ok();
+            }
+            else
+            {
+                prv_send_error();
+            }
+        }
+        return;
+    }
+
     /* -------------------- BLE END ------------------------ */
     if ((strncmp(p, "BLE END", 7) == 0) || (strncmp(p, "BLE END:", 8) == 0))
     {
@@ -319,6 +529,5 @@ void UI_Cmd_ProcessLine(const char* line_in)
         return;
     }
 
-    /* Unknown */
     prv_send_error();
 }

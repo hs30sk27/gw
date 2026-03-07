@@ -36,6 +36,8 @@ extern "C" {
 #include "ui_lpm.h"
 #include <stddef.h>
 
+
+
 extern void SystemClock_Config(void);
 
 /* USER CODE END Includes */

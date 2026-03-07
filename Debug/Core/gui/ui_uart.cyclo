@@ -7,7 +7,7 @@
 ../Core/gui/ui_uart.c:101:6:UI_UART_ResetRxBuffer	1
 ../Core/gui/ui_uart.c:109:6:UI_UART_RxCpltCallback	3
 ../Core/gui/ui_uart.c:136:6:UI_UART_ErrorCallback	2
-../Core/gui/ui_uart.c:147:6:UI_UART_ReadByte	1
-../Core/gui/ui_uart.c:152:6:UI_UART_SendBytes	3
-../Core/gui/ui_uart.c:162:6:UI_UART_SendString	2
-../Core/gui/ui_uart.c:168:10:UI_UART_GetLastRxMs	1
+../Core/gui/ui_uart.c:145:6:UI_UART_ReadByte	1
+../Core/gui/ui_uart.c:150:6:UI_UART_SendBytes	3
+../Core/gui/ui_uart.c:160:6:UI_UART_SendString	2
+../Core/gui/ui_uart.c:166:10:UI_UART_GetLastRxMs	1

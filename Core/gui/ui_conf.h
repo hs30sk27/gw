@@ -171,24 +171,13 @@
 #define UI_LED0_OFF_MS               (490u)
 
 /* -------------------------------------------------------------------------- */
-/* Fault debug / reset trace                                                  */
-/* -------------------------------------------------------------------------- */
-/*
- * rev30:
- *  - ui_fault log는 .noinit RAM + RTC Backup Register(DR8~DR14)에 마지막 체크포인트를 남깁니다.
- *  - 디버거에서는 아래 noinline 함수에 함수 브레이크포인트를 걸어 리셋 직전/직후를 잡습니다.
- *    * UI_Fault_Bp_ResetRecovered()
- *    * UI_Fault_Bp_BleBtOn() / UI_Fault_Bp_BleUartInit() / UI_Fault_Bp_BleAtReset()
- *    * UI_Fault_Bp_GwKeepalive() / UI_Fault_Bp_GwWakeCb() / UI_Fault_Bp_GwBeaconSend()
- *    * UI_Fault_Bp_GwRxArm() / UI_Fault_Bp_GwRxDone() / UI_Fault_Bp_HardFault()
- */
-
 /* -------------------------------------------------------------------------- */
 /* Node/Gateway 공통 파라미터                                                 */
 /* -------------------------------------------------------------------------- */
 #define UI_NET_ID_LEN                (10u)
 #define UI_MAX_NODES                 (50u)
 #define UI_TESTMODE_MAX_NODES        (10u)     /* 테스트 모드에서 노드 수 제한 */
+#define UI_LOC_ASCII_MAX             (160u)    /* GW LOC ASCII 저장 최대 길이(널 포함) */
 
 /* Node payload/record compact format */
 #define UI_NODE_BATT_LVL_LOW         (0u)
@@ -214,6 +203,9 @@
 /* Node 센서 체크 시작 시각 */
 #define UI_ND_SENSOR_START_S_NORMAL  (6u)      /* 00분06초 */
 #define UI_ND_SENSOR_START_S_TEST    (6u)      /* 테스트 모드에서도 00초 기준 +6초 */
+
+/* 내부 설정 저장용 Flash fallback 크기(FLASHSIZE_BASE를 못 읽는 경우) */
+#define UI_CFG_FLASH_FALLBACK_SIZE_BYTES (256u * 1024u)
 
 /* -------------------------------------------------------------------------- */
 /* UTIL_SEQ Task id (bit mask)                                                */

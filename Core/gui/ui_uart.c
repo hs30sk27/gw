@@ -2,7 +2,6 @@
 #include "ui_conf.h"
 #include "ui_ble.h"
 #include "ui_ringbuf.h"
-#include "ui_fault.h"
 
 #include "main.h"
 #include "stm32_seq.h"
@@ -12,6 +11,7 @@
 
 /* 프로젝트에서 생성된 UART 핸들 */
 extern UART_HandleTypeDef huart1;
+extern void GW_Catm1_UartRxCpltCallback(UART_HandleTypeDef *huart);
 
 /* main.c에서 생성된 Init 함수 */
 extern void MX_USART1_UART_Init(void);
@@ -137,8 +137,6 @@ void UI_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart == &huart1)
     {
-        UI_FAULT_CP(UI_CP_UART_ERROR, "UART_ERR", huart->ErrorCode, (uint32_t)huart->gState);
-        UI_Fault_Bp_UartError();
         /* 에러가 나도 RX 재시작 */
         (void)HAL_UART_Receive_IT(&huart1, &s_rx_byte, 1);
     }

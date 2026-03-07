@@ -1,7 +1,7 @@
 ../Core/gui/ui_hal_callbacks.c:21:6:UI_HAL_UART_RxCpltDispatch	1
-../Core/gui/ui_hal_callbacks.c:27:6:UI_HAL_UART_ErrorDispatch	1
-../Core/gui/ui_hal_callbacks.c:33:6:UI_HAL_LPUART1_IrqDispatch	2
-../Core/gui/ui_hal_callbacks.c:42:28:HAL_UART_RxCpltCallback	1
-../Core/gui/ui_hal_callbacks.c:47:28:HAL_UART_ErrorCallback	1
-../Core/gui/ui_hal_callbacks.c:52:28:LPUART1_IRQHandler	1
-../Core/gui/ui_hal_callbacks.c:59:6:HAL_GPIO_EXTI_Callback	1
+../Core/gui/ui_hal_callbacks.c:30:6:UI_HAL_UART_ErrorDispatch	1
+../Core/gui/ui_hal_callbacks.c:36:6:UI_HAL_LPUART1_IrqDispatch	2
+../Core/gui/ui_hal_callbacks.c:45:28:HAL_UART_RxCpltCallback	1
+../Core/gui/ui_hal_callbacks.c:50:28:HAL_UART_ErrorCallback	1
+../Core/gui/ui_hal_callbacks.c:55:28:LPUART1_IRQHandler	1
+../Core/gui/ui_hal_callbacks.c:62:6:HAL_GPIO_EXTI_Callback	1

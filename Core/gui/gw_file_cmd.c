@@ -142,8 +142,8 @@ static bool prv_rec_cb(const GW_StorageFileInfo_t* info,
     }
 
     prv_dt(rec->epoch_sec, tbuf, sizeof(tbuf));
-    prv_fmt_x10(vbuf, sizeof(vbuf), (int32_t)rec->rec.gw_volt_x10, rec->rec.gw_volt_x10 == 0xFFFFu);
-    prv_fmt_x10(t2buf, sizeof(t2buf), (int32_t)rec->rec.gw_temp_x10, ((uint16_t)rec->rec.gw_temp_x10) == 0xFFFFu);
+    prv_fmt_x10(vbuf, sizeof(vbuf), (int32_t)rec->rec.gw_volt_x10, rec->rec.gw_volt_x10 == 0xFFu);
+    prv_fmt_temp_c(t2buf, sizeof(t2buf), rec->rec.gw_temp_c);
 
     (void)snprintf(ctx->line, sizeof(ctx->line),
                    "REC:%lu,T:%s,GW:%u,NETID:%.*s,GWV:%s,GWT:%s\r\n",

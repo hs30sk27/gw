@@ -48,8 +48,7 @@ Core/gui/ui_lpm.o: ../Core/gui/ui_lpm.c ../Core/gui/ui_lpm.h \
  ../Utilities/misc/stm32_tiny_vsnprintf.h ../Core/Inc/utilities_def.h \
  ../Core/gui/ui_core.h ../Core/gui/ui_gpio.h ../Core/gui/ui_types.h \
  ../Core/gui/ui_uart.h ../Core/gui/ui_ble.h ../Core/gui/ui_time.h \
- ../Core/gui/ui_fault.h ../Utilities/lpm/tiny_lpm/stm32_lpm.h \
- ../Core/Inc/utilities_def.h
+ ../Utilities/lpm/tiny_lpm/stm32_lpm.h ../Core/Inc/utilities_def.h
 ../Core/gui/ui_lpm.h:
 ../Core/gui/ui_conf.h:
 ../Core/Inc/main.h:
@@ -109,6 +108,5 @@ D:/work26/gw/Core/gui/ui_lpm.h:
 ../Core/gui/ui_uart.h:
 ../Core/gui/ui_ble.h:
 ../Core/gui/ui_time.h:
-../Core/gui/ui_fault.h:
 ../Utilities/lpm/tiny_lpm/stm32_lpm.h:
 ../Core/Inc/utilities_def.h:

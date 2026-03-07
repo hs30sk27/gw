@@ -7,7 +7,6 @@
 #include "ui_uart.h"
 #include "ui_ble.h"
 #include "ui_time.h"
-#include "ui_fault.h"
 
 #include "stm32_lpm.h"
 #include "utilities_def.h" /* CFG_LPM_APPLI_Id */
@@ -161,12 +160,8 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
      *  - Radio(SubGHz)는 별도 파워/상태 관리가 필요할 수 있어 여기서는 건드리지 않습니다.
      *    (LoRa 동작 종료 시점에 Radio.Sleep()을 호출하는 방식으로 전류를 줄이세요.)
      */
-
-    UI_FAULT_CP(UI_CP_STOP_PRE, "UI_STOP_PRE", 0u, 0u);
-    UI_Fault_Bp_StopEnter();
     /* Reset 대비: Stop 진입 직전에 현재 시간을 Backup Register에 저장 */
     UI_Time_SaveToBackupNow();
-    UI_FAULT_CP(UI_CP_STOP_SAVE, "UI_STOP_SAV", 0u, 0u);
 
     /* SW 상태 정리: 다음 wake-up 이후 재진입 시 꼬임 방지 */
     UI_Core_ClearFlagsBeforeStop();

@@ -45,7 +45,8 @@ Core/gui/ui_config.o: ../Core/gui/ui_config.c ../Core/gui/ui_types.h \
  D:/work26/gw/Core/gui/ui_core.h D:/work26/gw/Core/gui/gw_app.h \
  D:/work26/gw/Core/gui/ui_lpm.h ../Core/Inc/utilities_conf.h \
  ../Drivers/CMSIS/Include/cmsis_compiler.h ../Utilities/misc/stm32_mem.h \
- ../Utilities/misc/stm32_tiny_vsnprintf.h ../Core/Inc/utilities_def.h
+ ../Utilities/misc/stm32_tiny_vsnprintf.h ../Core/Inc/utilities_def.h \
+ ../Core/gui/ui_crc16.h
 ../Core/gui/ui_types.h:
 ../Core/gui/ui_conf.h:
 ../Core/Inc/main.h:
@@ -99,3 +100,4 @@ D:/work26/gw/Core/gui/ui_lpm.h:
 ../Utilities/misc/stm32_mem.h:
 ../Utilities/misc/stm32_tiny_vsnprintf.h:
 ../Core/Inc/utilities_def.h:
+../Core/gui/ui_crc16.h:

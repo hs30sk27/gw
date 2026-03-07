@@ -20,8 +20,11 @@ extern UART_HandleTypeDef hlpuart1;
 
 void UI_HAL_UART_RxCpltDispatch(UART_HandleTypeDef *huart)
 {
+    /* 유지해야 할 RX callback 구조:
+     * HAL_UART_RxCpltCallback() -> UI_UART_RxCpltCallback()
+     * hlpuart1 분기는 UI_UART_RxCpltCallback() 내부에서만 처리한다.
+     * 여기서 CAT-M1 callback을 중복 호출하면 동일 RX byte가 2번 처리될 수 있다. */
     UI_UART_RxCpltCallback(huart);
-    GW_Catm1_UartRxCpltCallback(huart);
 }
 
 void UI_HAL_UART_ErrorDispatch(UART_HandleTypeDef *huart)

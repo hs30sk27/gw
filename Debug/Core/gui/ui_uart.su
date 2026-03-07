@@ -6,8 +6,8 @@
 ../Core/gui/ui_uart.c:90:6:UI_UART_DeInitLowPower	8	static
 ../Core/gui/ui_uart.c:101:6:UI_UART_ResetRxBuffer	8	static
 ../Core/gui/ui_uart.c:109:6:UI_UART_RxCpltCallback	16	static
-../Core/gui/ui_uart.c:136:6:UI_UART_ErrorCallback	16	static
-../Core/gui/ui_uart.c:147:6:UI_UART_ReadByte	0	static
-../Core/gui/ui_uart.c:152:6:UI_UART_SendBytes	16	static
-../Core/gui/ui_uart.c:162:6:UI_UART_SendString	8	static
-../Core/gui/ui_uart.c:168:10:UI_UART_GetLastRxMs	0	static
+../Core/gui/ui_uart.c:136:6:UI_UART_ErrorCallback	0	static
+../Core/gui/ui_uart.c:145:6:UI_UART_ReadByte	0	static
+../Core/gui/ui_uart.c:150:6:UI_UART_SendBytes	16	static
+../Core/gui/ui_uart.c:160:6:UI_UART_SendString	8	static
+../Core/gui/ui_uart.c:166:10:UI_UART_GetLastRxMs	0	static

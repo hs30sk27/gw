@@ -7,7 +7,6 @@
 #include "ui_time.h"
 #include "ui_ble.h"
 #include "ui_lpm.h"
-#include "ui_fault.h"
 #include "gw_app.h"
 #include "stm32_seq.h"
 #include "stm32_timer.h"
@@ -187,14 +186,11 @@ static void UI_TaskMain(void)
 
 void UI_Core_ClearFlagsBeforeStop(void)
 {
-    UI_FAULT_CP(UI_CP_STOP_PRE, "UI_STOP_CLR", 0u, 0u);
     prv_cmdrx_reset();
 }
 
 void UI_Init(void)
 {
-    UI_Fault_Init();
-    UI_FAULT_CP(UI_CP_BOOT_INIT_BEGIN, "UI_INIT_BG", 0u, 0u);
 
     /* Task 등록 */
     UTIL_SEQ_RegTask(UI_TASK_BIT_UI_MAIN, 0, UI_TaskMain);
@@ -213,8 +209,6 @@ void UI_Init(void)
      *   미생성 상태로 접근되어 비콘 미동작 또는 HardFault 원인이 될 수 있었다.
      */
     GW_App_Init();
-
-    UI_FAULT_CP(UI_CP_BOOT_INIT_DONE, "UI_INIT_DN", 0u, 0u);
 
     /* 초기 한 번 task 실행 유도(상태 정리) */
     UTIL_SEQ_SetTask(UI_TASK_BIT_UI_MAIN, 0);
