@@ -1,0 +1,1338 @@
+#include "nd_app.h"
+
+#include "ui_conf.h"
+#include "ui_types.h"
+#include "ui_time.h"
+#include "ui_packets.h"
+#include "ui_rf_plan_kr920.h"
+#include "ui_lpm.h"
+#include "ui_uart.h"
+#include "ui_ble.h"
+#include "ui_gpio.h"
+#include "ui_radio.h"
+#include "ui_crc16.h"
+
+#include "nd_sensors.h"
+
+#include "stm32_timer.h"
+#include "stm32_seq.h"
+#include "radio.h"
+
+#include "main.h"
+
+extern RTC_HandleTypeDef hrtc;
+
+#include <string.h>
+#include <stdio.h>
+
+/* -------------------------------------------------------------------------- */
+/* Node 상태                                                                  */
+/* -------------------------------------------------------------------------- */
+typedef enum
+{
+    ND_STATE_IDLE = 0,
+    ND_STATE_RX_BEACON,
+    ND_STATE_TX_DATA,
+} ND_State_t;
+
+typedef enum
+{
+    ND_RX_REASON_NONE = 0,
+    ND_RX_REASON_BOOT,
+    ND_RX_REASON_MAIN,
+    ND_RX_REASON_REMINDER,
+    ND_RX_REASON_SEARCH,
+} ND_RxReason_t;
+
+typedef enum
+{
+    ND_SYNC_BOOT_SEARCH = 0,
+    ND_SYNC_LOCKED,
+    ND_SYNC_HOLDOVER,
+    ND_SYNC_UNSYNC_SEARCH,
+} ND_SyncState_t;
+
+static ND_State_t s_state = ND_STATE_IDLE;
+static bool s_inited = false;
+
+/* 타이머 */
+static UTIL_TIMER_Object_t s_tmr_boot_listen;
+static UTIL_TIMER_Object_t s_tmr_beacon_sched;
+static UTIL_TIMER_Object_t s_tmr_reminder_sched;
+static UTIL_TIMER_Object_t s_tmr_sensor_sched;
+static UTIL_TIMER_Object_t s_tmr_tx_sched;
+static UTIL_TIMER_Object_t s_tmr_led1_pulse;
+
+static volatile uint32_t s_evt_flags = 0;
+#define ND_EVT_BOOT_LISTEN_START      (1u << 0)
+#define ND_EVT_BEACON_LISTEN_START    (1u << 1)
+#define ND_EVT_SENSOR_START           (1u << 2)
+#define ND_EVT_TX_START               (1u << 3)
+#define ND_EVT_REMINDER_LISTEN_START  (1u << 4)
+
+static bool     s_beacon_ok = false;         /* 최근 비콘 수신 성공 여부 */
+static uint16_t s_beacon_cnt = 0;            /* 비콘 수신 카운터 */
+static bool     s_test_mode = false;
+static ND_SyncState_t s_sync_state = ND_SYNC_BOOT_SEARCH;
+/* 최초 유효 비콘 이후에만 runtime을 켜고, miss가 누적되면 HOLDOVER/UNSYNC_SEARCH로 전이한다. */
+static bool     s_runtime_enabled = false;
+static uint8_t  s_beacon_miss_count = 0u;
+static uint32_t s_last_beacon_anchor_sec = 0u;
+
+static ND_SensorResult_t s_last_sensor;
+static bool s_sensor_ready = false;
+static uint8_t s_node_tx_payload[UI_NODE_PAYLOAD_LEN];
+
+/* 부팅 후 초기 6분은 6초 RX window를 반복해서 beacon 시간을 맞춘다. */
+#define ND_BOOT_RX_WINDOW_MS              (6000u)
+/*
+ * 운영 중 beacon re-sync window:
+ *  - 기본 5분 모드가 기준이고, 1분/2분은 테스트 모드다.
+ *  - GW beacon은 1회만 송신하므로, ND는 최근에 받은 beacon anchor를 기준으로
+ *    다음 beacon 시각을 예측해 조금 일찍 깨어난다.
+ *  - 비콘을 놓치면 early wake를 단계적으로 넓혀 HOLDOVER/UNSYNC_SEARCH에서도
+ *    다음 주기 beacon을 저전력으로 재획득한다.
+ */
+#define ND_BEACON_EARLY_WAKE_MS           (1000u)
+#define ND_BEACON_EARLY_WAKE_MS_2M        (500u)
+#define ND_BEACON_EARLY_WAKE_STEP_MS      (500u)
+#define ND_BEACON_EARLY_WAKE_MAX_MS       (2500u)
+#define ND_BEACON_EARLY_WAKE_MAX_MS_2M    (1500u)
+#define ND_BEACON_TAIL_MS_NORMAL          (5600u)
+#define ND_BEACON_TAIL_MS_2M              (5800u)
+/* Beacon payload(21B, SF11, BW125) is received roughly 0.6~0.7s after TX start.
+ * Apply centi-second correction so the next beacon window opens on time. */
+#define ND_BEACON_RX_TIME_CORR_CENTI      (74u)
+
+static bool     s_boot_listen_active = false;
+static uint32_t s_boot_listen_deadline_ms = 0u;
+static uint32_t s_rx_window_deadline_ms = 0u;
+static ND_RxReason_t s_rx_reason = ND_RX_REASON_NONE;
+
+#define ND_REMINDER_RX_WINDOW_MS_BASE      (2200u)
+#define ND_REMINDER_RX_WINDOW_MS_MAX       (3600u)
+#define ND_REMINDER_RX_WINDOW_STEP_MS      (200u)
+#define ND_REMINDER_TX_GUARD_MS            (600u)
+#define ND_SYNC_HOLDOVER_MAX_MISS          (2u)
+#define ND_SEARCH_RX_WINDOW_MS             (5000u)
+#define ND_SEARCH_SCAN_INTERVAL_MS_BASE    (47000u)
+#define ND_SEARCH_SCAN_INTERVAL_MS_JITTER  (13000u)
+
+#define ND_SYNC_BKP_MAGIC                  (0x4E445359u) /* 'NDSY' */
+#define ND_SYNC_BKP_DR_MAGIC               (RTC_BKP_DR0)
+#define ND_SYNC_BKP_DR_EPOCH               (RTC_BKP_DR1)
+#define ND_SYNC_BKP_DR_META                (RTC_BKP_DR2)
+#define ND_SYNC_BKP_DR_CRC                 (RTC_BKP_DR3)
+
+static bool prv_radio_ready_for_tx(void)
+{
+    if ((Radio.SetChannel == NULL) || (Radio.Send == NULL) || (Radio.Sleep == NULL))
+    {
+        return false;
+    }
+    return true;
+}
+
+static bool prv_radio_ready_for_rx(void)
+{
+    if ((Radio.SetChannel == NULL) || (Radio.Rx == NULL) || (Radio.Sleep == NULL))
+    {
+        return false;
+    }
+    return true;
+}
+
+/* LED0 */
+static void prv_led0(bool on)
+{
+#if defined(LED0_GPIO_Port) && defined(LED0_Pin)
+    HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+#else
+    (void)on;
+#endif
+}
+
+/* LED1 */
+static void prv_led1(bool on)
+{
+#if UI_HAVE_LED1
+    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+#else
+    (void)on;
+#endif
+}
+
+static void prv_led1_pulse_off_cb(void *context)
+{
+    (void)context;
+    prv_led1(false);
+}
+
+static void prv_led1_pulse_10ms(void)
+{
+    prv_led1(true);
+    (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_led1_pulse, 10u);
+    (void)UTIL_TIMER_Start(&s_tmr_led1_pulse);
+}
+
+static void prv_power_on_led_blink(void)
+{
+    for (uint32_t i = 0u; i < 2u; i++)
+    {
+        prv_led0(true);
+        prv_led1(true);
+        HAL_Delay(100u);
+        prv_led0(false);
+        prv_led1(false);
+        HAL_Delay(100u);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* 타이머 callback -> task                                                    */
+/* -------------------------------------------------------------------------- */
+static void prv_tmr_boot_cb(void *context)
+{
+    (void)context;
+    s_evt_flags |= ND_EVT_BOOT_LISTEN_START;
+    UTIL_SEQ_SetTask(UI_TASK_BIT_ND_MAIN, 0);
+}
+
+static void prv_tmr_beacon_cb(void *context)
+{
+    (void)context;
+    s_evt_flags |= ND_EVT_BEACON_LISTEN_START;
+    UTIL_SEQ_SetTask(UI_TASK_BIT_ND_MAIN, 0);
+}
+
+static void prv_tmr_reminder_cb(void *context)
+{
+    (void)context;
+    s_evt_flags |= ND_EVT_REMINDER_LISTEN_START;
+    UTIL_SEQ_SetTask(UI_TASK_BIT_ND_MAIN, 0);
+}
+
+static void prv_tmr_sensor_cb(void *context)
+{
+    (void)context;
+    s_evt_flags |= ND_EVT_SENSOR_START;
+    UTIL_SEQ_SetTask(UI_TASK_BIT_ND_MAIN, 0);
+}
+
+static void prv_tmr_tx_cb(void *context)
+{
+    (void)context;
+    s_evt_flags |= ND_EVT_TX_START;
+    UTIL_SEQ_SetTask(UI_TASK_BIT_ND_MAIN, 0);
+}
+
+/* -------------------------------------------------------------------------- */
+/* 스케줄 계산                                                                */
+/* -------------------------------------------------------------------------- */
+static void prv_apply_setting_ascii(const uint8_t setting_ascii[3])
+{
+    /*
+     * 노드 규칙:
+     *  - "01M" 이면 1분 테스트 모드
+     *  - 그 외는 정상 모드(설정 주기)
+     *
+     * 비콘을 한 번만 받아도 이후에는 로컬 설정으로 계속 동작한다.
+     * 이후 비콘을 잠시 놓쳐도 직전 설정을 유지한다.
+     */
+    uint8_t d0 = setting_ascii[0];
+    uint8_t d1 = setting_ascii[1];
+    char unit  = (char)setting_ascii[2];
+
+    if ((d0 < '0') || (d0 > '9') || (d1 < '0') || (d1 > '9') || ((unit != 'M') && (unit != 'H')))
+    {
+        UI_SetSetting(0u, 'H');
+        s_test_mode = false;
+        return;
+    }
+
+    uint8_t value = (uint8_t)((d0 - '0') * 10u + (d1 - '0'));
+    UI_SetSetting(value, unit);
+    s_test_mode = ((value == 1u) && (unit == 'M'));
+}
+
+static void prv_refresh_mode_from_config(void)
+{
+    const UI_Config_t* cfg = UI_GetConfig();
+    s_test_mode = ((cfg->setting_value == 1u) && (cfg->setting_unit == 'M'));
+}
+
+static bool prv_is_two_minute_mode_active(void)
+{
+    const UI_Config_t* cfg = UI_GetConfig();
+    return ((cfg->setting_value == 2u) && (cfg->setting_unit == 'M'));
+}
+
+static uint32_t prv_get_setting_cycle_sec(void)
+{
+    const UI_Config_t* cfg = UI_GetConfig();
+
+    if ((cfg->setting_value == 0u) || ((cfg->setting_unit != 'M') && (cfg->setting_unit != 'H')))
+    {
+        return 0u;
+    }
+
+    if (cfg->setting_unit == 'M')
+    {
+        return (uint32_t)cfg->setting_value * 60u;
+    }
+
+    return (uint32_t)cfg->setting_value * 3600u;
+}
+
+static uint32_t prv_get_normal_cycle_sec(void)
+{
+    uint32_t cycle_sec = prv_get_setting_cycle_sec();
+
+    if (cycle_sec == 0u)
+    {
+        return 3600u;
+    }
+
+    /* SETTING:2M은 별도 모드로 취급한다.
+     * - beacon listen : 2분마다 00초~05초 window
+     * - sensor start  : +06초
+     * - data tx       : +30초부터 node별 2초 슬롯
+     */
+    if (prv_is_two_minute_mode_active())
+    {
+        return 120u;
+    }
+
+    /* 정상 모드는 5분 기준으로 비콘을 맞추므로, 더 짧은 값은 5분으로 올려서 사용한다. */
+    if (cycle_sec < UI_BEACON_PERIOD_S)
+    {
+        return UI_BEACON_PERIOD_S;
+    }
+
+    return cycle_sec;
+}
+
+static uint32_t prv_get_beacon_interval_sec(void)
+{
+    if (s_test_mode)
+    {
+        return 60u;
+    }
+    if (prv_is_two_minute_mode_active())
+    {
+        return 120u;
+    }
+    return UI_BEACON_PERIOD_S;
+}
+
+static uint64_t prv_next_event_centi(uint64_t now_centi, uint32_t interval_sec, uint32_t offset_sec)
+{
+    uint32_t now_sec = (uint32_t)(now_centi / 100u);
+    uint32_t centi   = (uint32_t)(now_centi % 100u);
+
+    uint32_t cand_sec = now_sec + ((centi == 0u) ? 0u : 1u);
+
+    if (interval_sec == 0u)
+    {
+        return (uint64_t)(cand_sec + offset_sec) * 100u;
+    }
+
+    uint32_t rem = cand_sec % interval_sec;
+    uint32_t next_sec;
+
+    if (rem <= offset_sec)
+        next_sec = cand_sec - rem + offset_sec;
+    else
+        next_sec = cand_sec - rem + interval_sec + offset_sec;
+
+    return (uint64_t)next_sec * 100u;
+}
+
+static void prv_start_beacon_rx(uint32_t window_ms, ND_RxReason_t reason);
+static void prv_schedule_beacon_window(void);
+static void prv_schedule_reminder_window(void);
+static void prv_schedule_sensor_and_tx(void);
+
+static uint32_t prv_get_tx_base_offset_sec(void)
+{
+    /* 최신 요구:
+     * - ND data TX는 정상 모드도 +30초부터 시작
+     * - node 0..49는 2초 간격 슬롯을 사용
+     * - 1M/2M 단축 모드는 +30초에서 최대 5노드만 전송 */
+    return 30u;
+}
+
+static uint32_t prv_floor_cycle_anchor_sec(uint32_t epoch_sec, uint32_t period_sec)
+{
+    if (period_sec == 0u)
+    {
+        return epoch_sec;
+    }
+
+    if (s_last_beacon_anchor_sec != 0u)
+    {
+        if (epoch_sec >= s_last_beacon_anchor_sec)
+        {
+            return s_last_beacon_anchor_sec +
+                   (((epoch_sec - s_last_beacon_anchor_sec) / period_sec) * period_sec);
+        }
+
+        return s_last_beacon_anchor_sec;
+    }
+
+    return ((epoch_sec / period_sec) * period_sec);
+}
+
+static uint32_t prv_get_data_freq_anchor_sec(uint32_t now_sec)
+{
+    uint32_t period_sec = s_test_mode ? 60u : prv_get_normal_cycle_sec();
+    uint32_t cycle_anchor_sec = prv_floor_cycle_anchor_sec(now_sec, period_sec);
+
+    /* 같은 beacon cycle에서는 ND ID/slot과 무관하게 같은 hop anchor를 사용한다.
+     * slot 차이는 송신 시각만 다르고 주파수는 cycle 공통으로 고정한다. */
+    return cycle_anchor_sec + prv_get_tx_base_offset_sec();
+}
+
+static bool prv_get_next_predicted_beacon_centi(uint64_t now_centi, uint64_t* out_next_centi)
+{
+    uint32_t interval_sec;
+    uint64_t anchor_centi;
+    uint64_t step_centi;
+    uint64_t elapsed;
+    uint64_t steps;
+
+    if (out_next_centi == NULL)
+    {
+        return false;
+    }
+
+    interval_sec = prv_get_beacon_interval_sec();
+    if ((interval_sec == 0u) || (s_last_beacon_anchor_sec == 0u))
+    {
+        return false;
+    }
+
+    anchor_centi = (uint64_t)s_last_beacon_anchor_sec * 100u;
+    step_centi = (uint64_t)interval_sec * 100u;
+
+    if (now_centi < anchor_centi)
+    {
+        *out_next_centi = anchor_centi;
+        return true;
+    }
+
+    elapsed = now_centi - anchor_centi;
+    steps = (elapsed / step_centi) + 1u;
+    *out_next_centi = anchor_centi + (steps * step_centi);
+    return true;
+}
+
+
+static uint32_t prv_get_beacon_early_wake_ms(void)
+{
+    uint32_t base = prv_is_two_minute_mode_active() ? ND_BEACON_EARLY_WAKE_MS_2M : ND_BEACON_EARLY_WAKE_MS;
+    uint32_t max  = prv_is_two_minute_mode_active() ? ND_BEACON_EARLY_WAKE_MAX_MS_2M : ND_BEACON_EARLY_WAKE_MAX_MS;
+    uint32_t extra = (uint32_t)s_beacon_miss_count * ND_BEACON_EARLY_WAKE_STEP_MS;
+    uint32_t early = base + extra;
+
+    if (early > max)
+    {
+        early = max;
+    }
+
+    return early;
+}
+
+static uint32_t prv_get_beacon_window_ms(void)
+{
+    uint32_t early = prv_get_beacon_early_wake_ms();
+    uint32_t tail  = prv_is_two_minute_mode_active() ? ND_BEACON_TAIL_MS_2M : ND_BEACON_TAIL_MS_NORMAL;
+    return early + tail;
+}
+
+static uint32_t prv_get_unsync_search_delay_ms(void)
+{
+    uint32_t now_ms = UTIL_TIMER_GetCurrentTime();
+    return ND_SEARCH_SCAN_INTERVAL_MS_BASE + (now_ms % ND_SEARCH_SCAN_INTERVAL_MS_JITTER);
+}
+
+static uint32_t prv_pack_sync_meta(const uint8_t setting_ascii[3])
+{
+    return ((uint32_t)setting_ascii[0])
+         | ((uint32_t)setting_ascii[1] << 8u)
+         | ((uint32_t)setting_ascii[2] << 16u);
+}
+
+static void prv_unpack_sync_meta(uint32_t meta, uint8_t setting_ascii[3])
+{
+    setting_ascii[0] = (uint8_t)(meta & 0xFFu);
+    setting_ascii[1] = (uint8_t)((meta >> 8u) & 0xFFu);
+    setting_ascii[2] = (uint8_t)((meta >> 16u) & 0xFFu);
+}
+
+static bool prv_setting_ascii_is_valid(const uint8_t setting_ascii[3])
+{
+    uint8_t d0 = setting_ascii[0];
+    uint8_t d1 = setting_ascii[1];
+    char unit = (char)setting_ascii[2];
+
+    return (d0 >= (uint8_t)'0') && (d0 <= (uint8_t)'9') &&
+           (d1 >= (uint8_t)'0') && (d1 <= (uint8_t)'9') &&
+           ((unit == 'M') || (unit == 'H'));
+}
+
+static uint16_t prv_calc_sync_anchor_crc(uint32_t epoch_sec, uint32_t meta, const uint8_t net_id[UI_NET_ID_LEN])
+{
+    uint8_t buf[4u + 3u + UI_NET_ID_LEN];
+
+    buf[0] = (uint8_t)(epoch_sec & 0xFFu);
+    buf[1] = (uint8_t)((epoch_sec >> 8u) & 0xFFu);
+    buf[2] = (uint8_t)((epoch_sec >> 16u) & 0xFFu);
+    buf[3] = (uint8_t)((epoch_sec >> 24u) & 0xFFu);
+    buf[4] = (uint8_t)(meta & 0xFFu);
+    buf[5] = (uint8_t)((meta >> 8u) & 0xFFu);
+    buf[6] = (uint8_t)((meta >> 16u) & 0xFFu);
+    memcpy(&buf[7], net_id, UI_NET_ID_LEN);
+
+    return UI_CRC16_CCITT(buf, sizeof(buf), UI_CRC16_INIT);
+}
+
+static void prv_save_sync_anchor_from_beacon(const UI_Beacon_t* beacon)
+{
+    uint32_t epoch_sec;
+    uint32_t meta;
+    uint16_t crc;
+    const UI_Config_t* cfg;
+
+    if (beacon == NULL)
+    {
+        return;
+    }
+
+    cfg = UI_GetConfig();
+    epoch_sec = UI_Time_Epoch2016_FromCalendar(&beacon->dt);
+    meta = prv_pack_sync_meta(beacon->setting_ascii);
+    crc = prv_calc_sync_anchor_crc(epoch_sec, meta, cfg->net_id);
+
+    HAL_PWR_EnableBkUpAccess();
+    HAL_RTCEx_BKUPWrite(&hrtc, ND_SYNC_BKP_DR_MAGIC, ND_SYNC_BKP_MAGIC);
+    HAL_RTCEx_BKUPWrite(&hrtc, ND_SYNC_BKP_DR_EPOCH, epoch_sec);
+    HAL_RTCEx_BKUPWrite(&hrtc, ND_SYNC_BKP_DR_META, meta);
+    HAL_RTCEx_BKUPWrite(&hrtc, ND_SYNC_BKP_DR_CRC, (uint32_t)crc);
+
+    s_last_beacon_anchor_sec = epoch_sec;
+}
+
+static bool prv_load_sync_anchor(uint32_t* out_epoch_sec, uint8_t out_setting_ascii[3])
+{
+    uint32_t magic;
+    uint32_t epoch_sec;
+    uint32_t meta;
+    uint16_t crc_stored;
+    uint16_t crc_expected;
+    const UI_Config_t* cfg = UI_GetConfig();
+
+    if ((!UI_Time_IsValid()) || (out_setting_ascii == NULL))
+    {
+        return false;
+    }
+
+    magic = HAL_RTCEx_BKUPRead(&hrtc, ND_SYNC_BKP_DR_MAGIC);
+    if (magic != ND_SYNC_BKP_MAGIC)
+    {
+        return false;
+    }
+
+    epoch_sec = HAL_RTCEx_BKUPRead(&hrtc, ND_SYNC_BKP_DR_EPOCH);
+    meta = HAL_RTCEx_BKUPRead(&hrtc, ND_SYNC_BKP_DR_META);
+    crc_stored = (uint16_t)(HAL_RTCEx_BKUPRead(&hrtc, ND_SYNC_BKP_DR_CRC) & 0xFFFFu);
+
+    prv_unpack_sync_meta(meta, out_setting_ascii);
+    if (!prv_setting_ascii_is_valid(out_setting_ascii))
+    {
+        return false;
+    }
+
+    crc_expected = prv_calc_sync_anchor_crc(epoch_sec, meta, cfg->net_id);
+    if (crc_expected != crc_stored)
+    {
+        return false;
+    }
+
+    if (out_epoch_sec != NULL)
+    {
+        *out_epoch_sec = epoch_sec;
+    }
+
+    return true;
+}
+
+static void prv_enter_locked_from_beacon(const UI_Beacon_t* beacon)
+{
+    prv_save_sync_anchor_from_beacon(beacon);
+    s_sync_state = ND_SYNC_LOCKED;
+    s_beacon_ok = true;
+    s_beacon_miss_count = 0u;
+    s_boot_listen_active = false;
+    s_boot_listen_deadline_ms = 0u;
+    s_runtime_enabled = true;
+    s_sensor_ready = false;
+}
+
+static bool prv_try_enter_holdover_from_backup(void)
+{
+    uint8_t setting_ascii[3];
+    uint32_t epoch_sec = 0u;
+
+    if (!prv_load_sync_anchor(&epoch_sec, setting_ascii))
+    {
+        return false;
+    }
+
+    prv_apply_setting_ascii(setting_ascii);
+    s_last_beacon_anchor_sec = epoch_sec;
+    s_sync_state = ND_SYNC_HOLDOVER;
+    s_beacon_ok = false;
+    s_runtime_enabled = true;
+    s_sensor_ready = false;
+    if (s_beacon_miss_count < 1u)
+    {
+        s_beacon_miss_count = 1u;
+    }
+    return true;
+}
+
+static void prv_stop_sensor_and_tx_timers(void)
+{
+    (void)UTIL_TIMER_Stop(&s_tmr_sensor_sched);
+    (void)UTIL_TIMER_Stop(&s_tmr_tx_sched);
+    (void)UTIL_TIMER_Stop(&s_tmr_reminder_sched);
+}
+
+static void prv_schedule_unsync_search_scan(void)
+{
+    uint32_t delay_ms = prv_get_unsync_search_delay_ms();
+
+    (void)UTIL_TIMER_Stop(&s_tmr_beacon_sched);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_beacon_sched, delay_ms);
+    (void)UTIL_TIMER_Start(&s_tmr_beacon_sched);
+}
+
+static void prv_enter_unsync_search(void)
+{
+    s_sync_state = ND_SYNC_UNSYNC_SEARCH;
+    s_beacon_ok = false;
+    s_runtime_enabled = false;
+    s_sensor_ready = false;
+    s_boot_listen_active = false;
+    s_boot_listen_deadline_ms = 0u;
+    if (s_beacon_miss_count < 1u)
+    {
+        s_beacon_miss_count = 1u;
+    }
+
+    prv_stop_sensor_and_tx_timers();
+    prv_schedule_unsync_search_scan();
+}
+
+static void prv_note_main_beacon_miss(void)
+{
+    s_beacon_ok = false;
+
+    if (s_boot_listen_active)
+    {
+        return;
+    }
+
+    if ((s_sync_state == ND_SYNC_LOCKED) || (s_sync_state == ND_SYNC_HOLDOVER))
+    {
+        if (s_beacon_miss_count < 10u)
+        {
+            s_beacon_miss_count++;
+        }
+
+        if (s_beacon_miss_count > ND_SYNC_HOLDOVER_MAX_MISS)
+        {
+            prv_enter_unsync_search();
+        }
+        else
+        {
+            s_sync_state = ND_SYNC_HOLDOVER;
+        }
+    }
+}
+
+static uint32_t prv_ms_until(uint32_t deadline_ms)
+{
+    uint32_t now = UTIL_TIMER_GetCurrentTime();
+    return ((int32_t)(deadline_ms - now) > 0) ? (deadline_ms - now) : 0u;
+}
+
+static void prv_begin_boot_listen(void)
+{
+    /* 전원 ON 후에는 항상 6분 full listen을 먼저 수행한다.
+     * RTC/backup time가 살아 있어도, 이 구간에서는 beacon을 한 번 직접 받는 것을 우선한다. */
+    s_sync_state = ND_SYNC_BOOT_SEARCH;
+    s_runtime_enabled = false;
+    s_sensor_ready = false;
+    s_beacon_ok = false;
+    s_boot_listen_active = true;
+    s_boot_listen_deadline_ms = UTIL_TIMER_GetCurrentTime() + UI_ND_BOOT_LISTEN_MS;
+    prv_stop_sensor_and_tx_timers();
+
+    uint32_t first_ms = UI_ND_BOOT_LISTEN_MS;
+    if (first_ms > ND_BOOT_RX_WINDOW_MS)
+    {
+        first_ms = ND_BOOT_RX_WINDOW_MS;
+    }
+    if (first_ms == 0u)
+    {
+        first_ms = 1u;
+    }
+
+    prv_start_beacon_rx(first_ms, ND_RX_REASON_BOOT);
+}
+
+static bool prv_restart_current_rx_window(void)
+{
+    ND_RxReason_t reason = s_rx_reason;
+    uint32_t remain_ms = prv_ms_until(s_rx_window_deadline_ms);
+
+    if (remain_ms < 20u)
+    {
+        return false;
+    }
+
+    if (reason == ND_RX_REASON_NONE)
+    {
+        if (s_boot_listen_active)
+        {
+            reason = ND_RX_REASON_BOOT;
+        }
+        else if (s_sync_state == ND_SYNC_UNSYNC_SEARCH)
+        {
+            reason = ND_RX_REASON_SEARCH;
+        }
+        else
+        {
+            reason = ND_RX_REASON_MAIN;
+        }
+    }
+
+    prv_start_beacon_rx(remain_ms, reason);
+    return true;
+}
+
+static void prv_continue_boot_listen_or_schedule(void)
+{
+    if (s_boot_listen_active)
+    {
+        uint32_t remain_ms = prv_ms_until(s_boot_listen_deadline_ms);
+        if (remain_ms > 0u)
+        {
+            uint32_t next_ms = remain_ms;
+            if (next_ms > ND_BOOT_RX_WINDOW_MS)
+            {
+                next_ms = ND_BOOT_RX_WINDOW_MS;
+            }
+            if (next_ms == 0u)
+            {
+                next_ms = 1u;
+            }
+
+            prv_start_beacon_rx(next_ms, ND_RX_REASON_BOOT);
+            return;
+        }
+
+        s_boot_listen_active = false;
+        s_boot_listen_deadline_ms = 0u;
+
+        if (!prv_try_enter_holdover_from_backup())
+        {
+            prv_enter_unsync_search();
+            return;
+        }
+    }
+
+    prv_schedule_beacon_window();
+    if (s_runtime_enabled)
+    {
+        prv_schedule_reminder_window();
+        prv_schedule_sensor_and_tx();
+    }
+    else
+    {
+        prv_stop_sensor_and_tx_timers();
+    }
+}
+
+static void prv_start_beacon_rx(uint32_t window_ms, ND_RxReason_t reason)
+{
+    /* radio 사용 중이면 무시 */
+    if (s_state != ND_STATE_IDLE) return;
+
+    if (window_ms == 0u)
+    {
+        window_ms = 1u;
+    }
+
+    if (!prv_radio_ready_for_rx()) return;
+    if (!UI_Radio_PrepareRx(UI_BEACON_PAYLOAD_LEN))
+    {
+        return;
+    }
+
+    /* 주 비콘 window 시작 시에만 최근 beacon 상태를 다시 판정한다. */
+    if (reason != ND_RX_REASON_REMINDER)
+    {
+        s_beacon_ok = false;
+    }
+    s_rx_window_deadline_ms = UTIL_TIMER_GetCurrentTime() + window_ms;
+    s_rx_reason = reason;
+
+    UI_LPM_LockStop();
+    s_state = ND_STATE_RX_BEACON;
+
+    Radio.SetChannel(UI_RF_GetBeaconFreqHz());
+    Radio.Rx(window_ms);
+}
+
+static void prv_schedule_beacon_window(void)
+{
+    uint64_t now;
+    uint32_t interval_sec;
+    uint64_t next;
+    uint64_t delta_centi;
+    uint32_t delta_ms;
+    uint32_t early_ms;
+
+    if (!UI_Time_IsValid())
+    {
+        prv_schedule_unsync_search_scan();
+        return;
+    }
+
+    now = UI_Time_NowCenti2016();
+    interval_sec = prv_get_beacon_interval_sec();
+
+    if (!prv_get_next_predicted_beacon_centi(now, &next))
+    {
+        if (s_sync_state == ND_SYNC_UNSYNC_SEARCH)
+        {
+            prv_schedule_unsync_search_scan();
+            return;
+        }
+
+        next = prv_next_event_centi(now, interval_sec, 0u);
+    }
+
+    delta_centi = (next > now) ? (next - now) : 1u;
+    delta_ms = (uint32_t)(delta_centi * 10u);
+    early_ms = prv_get_beacon_early_wake_ms();
+
+    if (delta_ms > early_ms)
+    {
+        delta_ms -= early_ms;
+    }
+    else
+    {
+        delta_ms = 1u;
+    }
+
+    (void)UTIL_TIMER_Stop(&s_tmr_beacon_sched);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_beacon_sched, delta_ms);
+    (void)UTIL_TIMER_Start(&s_tmr_beacon_sched);
+}
+
+static void prv_schedule_reminder_window(void)
+{
+    /* 최신 요구:
+     * - GW beacon은 한 번만 송신
+     * - ND는 reminder listen 대신 다음 예측 beacon window에서 저전력 재동기를 수행한다. */
+    (void)UTIL_TIMER_Stop(&s_tmr_reminder_sched);
+}
+
+static void prv_schedule_sensor_and_tx(void)
+{
+    if (!s_runtime_enabled)
+    {
+        prv_stop_sensor_and_tx_timers();
+        s_sensor_ready = false;
+        return;
+    }
+
+    prv_refresh_mode_from_config();
+
+    const UI_Config_t* cfg = UI_GetConfig();
+    uint8_t node = cfg->node_num;
+
+    /* SETTING:1M / 2M 단축 모드
+     * - +30초부터 node별 2초 슬롯
+     * - 최대 5노드만 전송 (총 10초) */
+    if (s_test_mode && node >= 5u)
+    {
+        return;
+    }
+
+    if (prv_is_two_minute_mode_active() && node >= 5u)
+    {
+        return;
+    }
+
+    uint64_t now = UI_Time_NowCenti2016();
+
+    uint32_t period = s_test_mode ? 60u : prv_get_normal_cycle_sec();
+    uint32_t sensor_off = s_test_mode ? UI_ND_SENSOR_START_S_TEST : 6u;
+    uint32_t base_tx = prv_get_tx_base_offset_sec();
+
+    if (prv_is_two_minute_mode_active())
+    {
+        sensor_off = 6u;
+    }
+    else if (!s_test_mode)
+    {
+        /* 정상 모드도 +30초 TX 전에 측정이 끝나도록 고정 */
+        sensor_off = 6u;
+    }
+
+    /* TX offset:
+     *  - 01M test mode: 기존 30초 슬롯 유지
+     *  - 02M mode     : +30초부터 node별 2초 슬롯 송신
+     *  - normal mode  : 설정 주기 +01분부터 node별 2초 슬롯 송신 */
+    uint32_t tx_off = base_tx + (uint32_t)node * 2u;
+
+    uint64_t next_sensor = prv_next_event_centi(now, period, sensor_off);
+    uint64_t next_tx     = prv_next_event_centi(now, period, tx_off);
+
+    if (prv_is_two_minute_mode_active())
+    {
+    }
+
+    /* 센서/송신 예약 */
+    uint32_t ds_ms = (uint32_t)((next_sensor > now) ? ((next_sensor - now) * 10u) : 1u);
+    uint32_t dt_ms = (uint32_t)((next_tx > now) ? ((next_tx - now) * 10u) : 1u);
+
+    (void)UTIL_TIMER_Stop(&s_tmr_sensor_sched);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_sensor_sched, ds_ms);
+    (void)UTIL_TIMER_Start(&s_tmr_sensor_sched);
+
+    (void)UTIL_TIMER_Stop(&s_tmr_tx_sched);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_tx_sched, dt_ms);
+    (void)UTIL_TIMER_Start(&s_tmr_tx_sched);
+}
+
+/* -------------------------------------------------------------------------- */
+/* OP_KEY 처리 (UI_Core hook override)                                        */
+/* -------------------------------------------------------------------------- */
+void UI_Hook_OnOpKeyPressed(void)
+{
+    /* 센서 측정 -> BLE ON -> ASCII 전송 */
+    prv_led1(true);
+
+    ND_SensorResult_t r;
+    (void)ND_Sensors_MeasureAll(&r);
+
+    UI_BLE_EnableForMs(UI_BLE_ACTIVE_MS);
+
+    /* <날짜:X,Y,Z,ADC VALUE, PULSE COUNT> */
+    char ts[48];
+    UI_Time_FormatNow(ts, sizeof(ts));
+
+    char msg[160];
+    uint32_t pulse = r.pulse_cnt;
+
+    (void)snprintf(msg, sizeof(msg),
+                   "<%s:%d,%d,%d,%u,%lu>\r\n",
+                   ts,
+                   (int)r.x, (int)r.y, (int)r.z,
+                   (unsigned)r.adc,
+                   (unsigned long)pulse);
+
+    UI_UART_SendString(msg);
+
+    prv_led1(false);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Task main                                                                   */
+/* -------------------------------------------------------------------------- */
+void ND_App_Process(void)
+{
+    if (!s_inited)
+    {
+        return;
+    }
+
+    uint32_t ev = s_evt_flags;
+    s_evt_flags = 0;
+
+    if ((ev & ND_EVT_BOOT_LISTEN_START) != 0u)
+    {
+        /* 부팅 후 6분은 6초 window를 반복해서 beacon을 잡는다. */
+        prv_begin_boot_listen();
+        return;
+    }
+
+    if ((ev & ND_EVT_BEACON_LISTEN_START) != 0u)
+    {
+        if (!UI_Time_IsValid())
+        {
+            prv_start_beacon_rx(ND_SEARCH_RX_WINDOW_MS, ND_RX_REASON_SEARCH);
+        }
+        else if (s_sync_state == ND_SYNC_UNSYNC_SEARCH)
+        {
+            /* 최근 beacon anchor가 남아 있으면 다음 예측 beacon에서만 크게 듣고,
+             * anchor가 없을 때만 periodic search scan으로 복구한다. */
+            uint32_t window_ms = (s_last_beacon_anchor_sec != 0u) ? prv_get_beacon_window_ms() : ND_SEARCH_RX_WINDOW_MS;
+            prv_start_beacon_rx(window_ms, ND_RX_REASON_SEARCH);
+        }
+        else
+        {
+            /* holdover 상태에서도 같은 beacon phase 기준으로 re-sync를 계속 시도한다. */
+            prv_start_beacon_rx(prv_get_beacon_window_ms(), ND_RX_REASON_MAIN);
+        }
+        return;
+    }
+
+    if ((ev & ND_EVT_REMINDER_LISTEN_START) != 0u)
+    {
+        /* reminder beacon disabled */
+        return;
+    }
+
+    if ((ev & ND_EVT_SENSOR_START) != 0u)
+    {
+        if (!s_runtime_enabled)
+        {
+            s_sensor_ready = false;
+            return;
+        }
+
+        s_sensor_ready = ND_Sensors_MeasureAll(&s_last_sensor);
+        return;
+    }
+
+    if ((ev & ND_EVT_TX_START) != 0u)
+    {
+        if (!s_runtime_enabled)
+        {
+            return;
+        }
+
+        if (!s_sensor_ready) return;
+
+        if (s_state != ND_STATE_IDLE) return;
+
+        /* 데이터 송신 */
+        const UI_Config_t* cfg = UI_GetConfig();
+        uint32_t now_sec = UI_Time_NowSec2016();
+
+        uint32_t hop_period = s_test_mode ? 60u : prv_get_normal_cycle_sec();
+        uint32_t freq_anchor_sec = prv_get_data_freq_anchor_sec(now_sec);
+        uint32_t freq = UI_RF_GetDataFreqHz(freq_anchor_sec, hop_period, 0u);
+
+        UI_NodeData_t nd = {0};
+        nd.node_num   = cfg->node_num;
+        memcpy(nd.net_id, cfg->net_id, UI_NET_ID_LEN);
+        nd.batt_lvl  = s_last_sensor.batt_lvl;
+        nd.temp_c     = s_last_sensor.temp_c;
+        nd.beacon_cnt = s_beacon_cnt;
+        nd.x          = s_last_sensor.x;
+        nd.y          = s_last_sensor.y;
+        nd.z          = s_last_sensor.z;
+        nd.adc        = s_last_sensor.adc;
+        nd.pulse_cnt  = s_last_sensor.pulse_cnt;
+
+        (void)UI_Pkt_BuildNodeData(s_node_tx_payload, &nd);
+
+        if (!prv_radio_ready_for_tx())
+        {
+            return;
+        }
+        if (!UI_Radio_PrepareTx(UI_NODE_PAYLOAD_LEN))
+        {
+            return;
+        }
+
+        UI_LPM_LockStop();
+        s_state = ND_STATE_TX_DATA;
+
+        /* 같은 beacon cycle에서는 모든 ND가 같은 data frequency를 사용한다. */
+        Radio.SetChannel(freq);
+        prv_led1_pulse_10ms();
+        Radio.Send(s_node_tx_payload, UI_NODE_PAYLOAD_LEN);
+        return;
+    }
+
+}
+
+static void ND_TaskMain(void)
+{
+    /* 멀티 task 모드에서만 등록/호출됨 */
+    ND_App_Process();
+}
+
+/* -------------------------------------------------------------------------- */
+/* Public API                                                                 */
+/* -------------------------------------------------------------------------- */
+void ND_App_Init(void)
+{
+    if (s_inited)
+    {
+        return;
+    }
+    /* Task 등록 (task bit이 충분한 경우에만 분리) */
+#if (UI_USE_SEQ_MULTI_TASKS == 1u)
+    UTIL_SEQ_RegTask(UI_TASK_BIT_ND_MAIN, 0, ND_TaskMain);
+#endif
+
+    (void)UTIL_TIMER_Create(&s_tmr_boot_listen, 100u, UTIL_TIMER_ONESHOT, prv_tmr_boot_cb, NULL);
+    (void)UTIL_TIMER_Create(&s_tmr_beacon_sched, 100u, UTIL_TIMER_ONESHOT, prv_tmr_beacon_cb, NULL);
+    (void)UTIL_TIMER_Create(&s_tmr_reminder_sched, 100u, UTIL_TIMER_ONESHOT, prv_tmr_reminder_cb, NULL);
+    (void)UTIL_TIMER_Create(&s_tmr_sensor_sched, 100u, UTIL_TIMER_ONESHOT, prv_tmr_sensor_cb, NULL);
+    (void)UTIL_TIMER_Create(&s_tmr_tx_sched, 100u, UTIL_TIMER_ONESHOT, prv_tmr_tx_cb, NULL);
+    (void)UTIL_TIMER_Create(&s_tmr_led1_pulse, 10u, UTIL_TIMER_ONESHOT, prv_led1_pulse_off_cb, NULL);
+
+    ND_Sensors_Init();
+    prv_power_on_led_blink();
+
+    s_state = ND_STATE_IDLE;
+    s_beacon_ok = false;
+    s_beacon_cnt = 0;
+    s_test_mode = false;
+    s_sync_state = ND_SYNC_BOOT_SEARCH;
+    s_runtime_enabled = false;
+    s_beacon_miss_count = 0u;
+    s_last_beacon_anchor_sec = 0u;
+    s_sensor_ready = false;
+    s_boot_listen_active = false;
+    s_boot_listen_deadline_ms = 0u;
+    s_rx_window_deadline_ms = 0u;
+    s_rx_reason = ND_RX_REASON_NONE;
+    UI_Radio_MarkRecoverNeeded();
+
+    s_inited = true;
+
+    prv_refresh_mode_from_config();
+    prv_stop_sensor_and_tx_timers();
+
+    /* 전원 ON 후에는 항상 6분 full listen을 먼저 수행한다. */
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_boot_listen, 10u);
+    (void)UTIL_TIMER_Start(&s_tmr_boot_listen);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Radio event handlers                                                       */
+/* -------------------------------------------------------------------------- */
+void ND_Radio_OnTxDone(void)
+{
+    if (s_state == ND_STATE_TX_DATA)
+    {
+        UI_Radio_MarkRecoverNeeded();
+        Radio.Sleep();
+        s_state = ND_STATE_IDLE;
+        UI_LPM_UnlockStop();
+
+        s_sensor_ready = false;
+
+        /* 다음 스케줄 갱신 */
+        prv_continue_boot_listen_or_schedule();
+        prv_schedule_reminder_window();
+        prv_schedule_sensor_and_tx();
+    }
+}
+
+void ND_Radio_OnTxTimeout(void)
+{
+    /*
+     * subghz_phy_app.c의 OnTxTimeout()에서 호출.
+     * TX timeout이 발생하면 Radio를 Sleep으로 보내고 상태를 복구해야
+     * 불필요한 소비 전류가 줄어듭니다.
+     */
+    UI_Radio_MarkRecoverNeeded();
+    Radio.Sleep();
+
+    if (s_state != ND_STATE_IDLE)
+    {
+        s_state = ND_STATE_IDLE;
+        UI_LPM_UnlockStop();
+    }
+
+    s_sensor_ready = false;
+    prv_continue_boot_listen_or_schedule();
+    prv_schedule_reminder_window();
+    prv_schedule_sensor_and_tx();
+}
+
+void ND_Radio_OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr)
+{
+    ND_RxReason_t rx_reason = s_rx_reason;
+
+    (void)rssi;
+    (void)snr;
+
+    if (s_state == ND_STATE_RX_BEACON)
+    {
+        bool beacon_valid = false;
+        UI_Beacon_t b;
+
+        if (size != UI_BEACON_PAYLOAD_LEN)
+        {
+        }
+        else if (UI_Pkt_ParseBeacon(payload, size, &b))
+        {
+            /* NETID 체크:
+             *  - 초기에는 NETID가 기본값일 수 있으므로, 동일하면 OK
+             *  - 다른 경우도 '새 NETID로 갱신'이 필요하면 아래 정책 변경 가능
+             */
+            const UI_Config_t* cfg = UI_GetConfig();
+            if (memcmp(b.net_id, cfg->net_id, UI_NET_ID_LEN) == 0)
+            {
+                beacon_valid = true;
+
+                /* 실제 비콘 수신 완료 시 LED1 10ms pulse */
+                prv_led1_pulse_10ms();
+
+                /*
+                 * Beacon time correction:
+                 *  - GW beacon time field is the TX start second (00/02/04).
+                 *  - ND receives RxDone about 0.6~0.7 s later, so setting centi=0 makes
+                 *    the local clock lag behind and the next 1-minute beacon window opens late.
+                 *  - Apply a fixed centi correction so minute alignment stays locked.
+                 */
+                uint32_t epoch_sec = UI_Time_Epoch2016_FromCalendar(&b.dt);
+                uint64_t epoch_centi = (uint64_t)epoch_sec * 100u + (uint64_t)ND_BEACON_RX_TIME_CORR_CENTI;
+                UI_Time_SetEpochCenti2016(epoch_centi);
+
+                /* setting 반영: 01M만 테스트 모드, 그 외는 정상 모드 */
+                prv_apply_setting_ascii(b.setting_ascii);
+
+                s_beacon_cnt++;
+                prv_enter_locked_from_beacon(&b);
+
+                /* 유효 beacon을 받으면 miss count를 초기화하고 즉시 재동기한다. */
+                prv_schedule_beacon_window();
+                prv_schedule_reminder_window();
+                prv_schedule_sensor_and_tx();
+            }
+            else
+            {
+            }
+        }
+        else
+        {
+        }
+
+        UI_Radio_MarkRecoverNeeded();
+        Radio.Sleep();
+        s_state = ND_STATE_IDLE;
+        s_rx_reason = ND_RX_REASON_NONE;
+        UI_LPM_UnlockStop();
+
+        if (!beacon_valid)
+        {
+            if (!prv_restart_current_rx_window())
+            {
+                if (rx_reason == ND_RX_REASON_MAIN)
+                {
+                    prv_note_main_beacon_miss();
+                }
+                prv_continue_boot_listen_or_schedule();
+            }
+        }
+    }
+}
+
+void ND_Radio_OnRxTimeout(void)
+{
+    ND_RxReason_t rx_reason = s_rx_reason;
+
+    if (s_state == ND_STATE_RX_BEACON)
+    {
+        /* reminder/search miss는 penalty 없이 지나가고, main beacon miss만 HOLDOVER/UNSYNC_SEARCH에 반영한다. */
+        if (rx_reason == ND_RX_REASON_MAIN)
+        {
+            prv_note_main_beacon_miss();
+        }
+
+        UI_Radio_MarkRecoverNeeded();
+        Radio.Sleep();
+        s_state = ND_STATE_IDLE;
+        s_rx_reason = ND_RX_REASON_NONE;
+        UI_LPM_UnlockStop();
+
+        /* 초기 6분 구간이면 계속 이어서 듣고, 그 외에는 다음 window/search 예약 */
+        prv_continue_boot_listen_or_schedule();
+    }
+}
+
+void ND_Radio_OnRxError(void)
+{
+    ND_RxReason_t rx_reason = s_rx_reason;
+
+    if (s_state == ND_STATE_RX_BEACON)
+    {
+        if (rx_reason == ND_RX_REASON_MAIN)
+        {
+            prv_note_main_beacon_miss();
+        }
+
+        UI_Radio_MarkRecoverNeeded();
+        Radio.Sleep();
+        s_state = ND_STATE_IDLE;
+        s_rx_reason = ND_RX_REASON_NONE;
+        UI_LPM_UnlockStop();
+
+        prv_continue_boot_listen_or_schedule();
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* UI_CMD hook overrides                                                      */
+/* -------------------------------------------------------------------------- */
+void UI_Hook_OnConfigChanged(void)
+{
+    /* 노드 번호/NETID/SETTING 변경 -> 현재 sync state 기준으로 스케줄만 재계산 */
+    prv_refresh_mode_from_config();
+
+    if (!s_boot_listen_active)
+    {
+        if ((!s_runtime_enabled) && (s_sync_state == ND_SYNC_UNSYNC_SEARCH))
+        {
+            (void)prv_try_enter_holdover_from_backup();
+        }
+        prv_schedule_beacon_window();
+    }
+
+    if (s_runtime_enabled)
+    {
+        prv_schedule_reminder_window();
+        prv_schedule_sensor_and_tx();
+    }
+    else
+    {
+        prv_stop_sensor_and_tx_timers();
+    }
+}
+
+void UI_Hook_OnTimeChanged(void)
+{
+    /* 수동 시간 변경만으로 runtime을 열지 않는다.
+     * 다만 이미 backup sync anchor가 있고 UNSYNC_SEARCH 중이면 HOLDOVER 복구는 허용한다. */
+    if ((!s_boot_listen_active) && (!s_runtime_enabled) && (s_sync_state == ND_SYNC_UNSYNC_SEARCH))
+    {
+        (void)prv_try_enter_holdover_from_backup();
+    }
+
+    if (!s_boot_listen_active)
+    {
+        prv_schedule_beacon_window();
+    }
+    if (s_runtime_enabled)
+    {
+        prv_schedule_reminder_window();
+        prv_schedule_sensor_and_tx();
+    }
+}
+

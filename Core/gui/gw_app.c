@@ -72,8 +72,6 @@ static uint32_t s_last_save_minute_id = 0xFFFFFFFFu;
 static bool     s_catm1_uplink_pending = false;
 static uint32_t s_last_catm1_slot_id = 0xFFFFFFFFu;
 static uint32_t s_last_2m_prep_slot_id = 0xFFFFFFFFu;
-static uint32_t s_last_beacon_slot_id = 0xFFFFFFFFu;
-static uint32_t s_last_rx_slot_id = 0xFFFFFFFFu;
 static uint32_t s_flash_tx_boot_tail_index = 0u;  /* boot 시점 flash tail (부팅 이전 old data cut line) */
 static uint32_t s_flash_tx_next_send_index = 0u;  /* boot 이후 신규 저장분 중 다음 oldest unsent index */
 static bool     s_boot_time_sync_pending = false;
@@ -87,11 +85,11 @@ static uint32_t s_beacon_burst_gap_ms = 0u;
  * 현장 증상(BEACON ON 무반응 / SETTING:1M 후 HardFault)은
  * 로컬 스택 버퍼를 넘길 때와 일치할 수 있어, 정적 버퍼로 고정한다.
  */
-#define GW_BEACON_BURST_COUNT_NORMAL      (1u)
-#define GW_BEACON_BURST_COUNT_RECOVERY    (1u)
-#define GW_BEACON_BURST_GAP_MS            (0u)
-#define GW_BEACON_REMINDER_BURST_COUNT    (0u)
-#define GW_BEACON_REMINDER_GAP_MS         (0u)
+#define GW_BEACON_BURST_COUNT_NORMAL      (3u)
+#define GW_BEACON_BURST_COUNT_RECOVERY    (5u)
+#define GW_BEACON_BURST_GAP_MS            (250u)
+#define GW_BEACON_REMINDER_BURST_COUNT    (2u)
+#define GW_BEACON_REMINDER_GAP_MS         (200u)
 
 static uint8_t s_beacon_tx_payload[UI_BEACON_PAYLOAD_LEN];
 static uint8_t s_rx_shadow[UI_NODE_PAYLOAD_LEN];
@@ -515,11 +513,13 @@ static uint32_t prv_get_rx_start_offset_sec(void)
     {
         /* SETTING:2M
          * - 00초 beacon
-         * - 30초부터 RX 슬롯 시작 (최대 10노드, 2초 슬롯)
+         * - 30초부터 RX 슬롯 시작 (최대 5노드, 2초 슬롯)
          * - 01분 30초 TCP 전송 */
         return 30u;
     }
-    return UI_GW_RX_START_OFFSET_S;
+
+    /* 최신 요구: 정상 모드도 ND 데이터는 +30초부터 node별 2초 슬롯으로 수신 */
+    return 30u;
 }
 
 static bool prv_get_reminder_offset_sec(uint32_t* out_offset_sec)
@@ -809,12 +809,6 @@ static uint32_t prv_get_catm1_period_sec(void)
 
 static uint32_t prv_get_catm1_offset_sec(void)
 {
-    if (s_test_mode)
-    {
-        /* 1M 단축 모드에서는 RX 종료 직후인 +40초에 CATM1을 시작한다. */
-        return 40u;
-    }
-
     return prv_is_two_minute_mode_active() ? 90u : UI_CATM1_PERIODIC_OFFSET_S;
 }
 
@@ -825,21 +819,6 @@ static uint32_t prv_catm1_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t pe
         return 0xFFFFFFFFu;
     }
     return (epoch_sec / period_sec);
-}
-
-static uint32_t prv_periodic_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t interval_sec, uint32_t offset_sec)
-{
-    if (interval_sec == 0u)
-    {
-        return 0xFFFFFFFFu;
-    }
-
-    if (epoch_sec < offset_sec)
-    {
-        return 0u;
-    }
-
-    return ((epoch_sec - offset_sec) / interval_sec);
 }
 
 static bool prv_last_cycle_matches_slot(uint32_t period_sec, uint32_t slot_id)
@@ -1329,16 +1308,6 @@ void GW_App_Process(void)
         if (beacon_due_now)
         {
             uint32_t beacon_sec = (uint32_t)(due_beacon / 100u);
-            uint32_t beacon_slot_id = prv_periodic_slot_id_from_epoch_sec(beacon_sec, beacon_interval, beacon_off);
-
-            /* grace window 안에서 같은 beacon slot을 다시 처리하지 않는다.
-             * GW0/1/2는 각자 0/2/4초 slot에서 1회만 송신한다. */
-            if (s_last_beacon_slot_id == beacon_slot_id)
-            {
-                prv_schedule_wakeup();
-                return;
-            }
-            s_last_beacon_slot_id = beacon_slot_id;
 
             prv_prepare_beacon_burst(beacon_sec, prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
             if (prv_start_pending_beacon_burst())
@@ -1353,20 +1322,8 @@ void GW_App_Process(void)
         /* (2) 데이터 수신 슬롯 시작: 실제 due 시점에만 시작 */
         if (rx_due_now)
         {
-            uint32_t rx_sec = (uint32_t)(due_rx / 100u);
-            uint32_t rx_slot_id = prv_periodic_slot_id_from_epoch_sec(rx_sec, rx_interval, rx_start);
-
-            /* 1M/2M 포함 모든 수신 윈도우는 slot당 1회만 연다.
-             * 같은 +30초 slot이 wakeup 재진입으로 중복 열리지 않도록 막는다. */
-            if (s_last_rx_slot_id == rx_slot_id)
-            {
-                prv_schedule_wakeup();
-                return;
-            }
-            s_last_rx_slot_id = rx_slot_id;
-
             uint32_t hop_period = prv_get_hop_period_sec();
-            s_data_freq_hz = UI_RF_GetDataFreqHz(rx_sec, hop_period, 0u);
+            s_data_freq_hz = UI_RF_GetDataFreqHz((uint32_t)(due_rx / 100u), hop_period, 0u);
 
             const UI_Config_t* cfg = UI_GetConfig();
             s_slot_cnt = (uint8_t)cfg->max_nodes;
@@ -1377,8 +1334,8 @@ void GW_App_Process(void)
 
             /* SETTING:2M
              * - 30초 RX 시작
-             * - 2초 슬롯 기준 최대 10노드만 수신 */
-            if (prv_is_two_minute_mode_active() && (s_slot_cnt > 10u)) { s_slot_cnt = 10u; }
+             * - 2초 슬롯 기준 최대 5노드만 수신 */
+            if (prv_is_two_minute_mode_active() && (s_slot_cnt > 5u)) { s_slot_cnt = 5u; }
             s_slot_idx = 0;
 
             if (!prv_radio_ready_for_rx())
@@ -1530,8 +1487,6 @@ void GW_App_Init(void)
     s_catm1_uplink_pending = false;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
-    s_last_beacon_slot_id = 0xFFFFFFFFu;
-    s_last_rx_slot_id = 0xFFFFFFFFu;
     s_boot_time_sync_pending = true;
 
     /* 부팅 직후 record는 현재 RTC 기준으로 먼저 준비하고,
@@ -1558,8 +1513,6 @@ void UI_Hook_OnConfigChanged(void)
     s_catm1_uplink_pending = false;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
-    s_last_beacon_slot_id = 0xFFFFFFFFu;
-    s_last_rx_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
     prv_schedule_wakeup();
 }
@@ -1574,16 +1527,15 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
         return;
     }
 
-    /* SETTING 변경 시 즉시 beacon을 추가 송신하지 않는다.
-     * 다음 정규 beacon slot(GW0/1/2 -> 0/2/4초)에서 1회만 반영한다. */
+    /* SETTING 변경은 곧바로 스케줄 재계산 + 단발 beacon 1회 송신 시도 */
     s_last_save_minute_id = 0xFFFFFFFFu;
     s_catm1_uplink_pending = false;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
-    s_last_beacon_slot_id = 0xFFFFFFFFu;
-    s_last_rx_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
-    prv_schedule_wakeup();
+    prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
+    s_evt_flags |= GW_EVT_BEACON_ONESHOT;
+    UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
 void UI_Hook_OnTimeChanged(void)
@@ -1598,8 +1550,6 @@ void UI_Hook_OnTimeChanged(void)
     s_catm1_uplink_pending = false;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
-    s_last_beacon_slot_id = 0xFFFFFFFFu;
-    s_last_rx_slot_id = 0xFFFFFFFFu;
     prv_schedule_wakeup();
 }
 
@@ -1675,15 +1625,7 @@ static void prv_rx_next_slot(void)
              * 기존 50초 저장/푸시 방식은 테스트 시간이 길어져,
              * RX 종료 즉시 저장 후 uplink를 요청한다. */
             uint32_t now_sec = UI_Time_NowSec2016();
-            uint32_t catm1_period = prv_get_catm1_period_sec();
             prv_handle_test50_actions(now_sec);
-
-            if (catm1_period != 0u)
-            {
-                /* 즉시 uplink를 수행한 cycle은 +40초 periodic wakeup에서 다시 재시도하지 않는다. */
-                s_last_catm1_slot_id = prv_catm1_slot_id_from_epoch_sec(now_sec, catm1_period);
-            }
-
             prv_request_catm1_uplink();
 
             /* 1M 모드 단축: RX 종료(≈40초) 직후 즉시 TCP uplink를 시작해야 한다.

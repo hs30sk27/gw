@@ -20,17 +20,27 @@ extern UART_HandleTypeDef hlpuart1;
 
 void UI_HAL_UART_RxCpltDispatch(UART_HandleTypeDef *huart)
 {
-    /* 유지해야 할 RX callback 구조:
-     * HAL_UART_RxCpltCallback() -> UI_UART_RxCpltCallback()
-     * hlpuart1 분기는 UI_UART_RxCpltCallback() 내부에서만 처리한다.
-     * 여기서 CAT-M1 callback을 중복 호출하면 동일 RX byte가 2번 처리될 수 있다. */
+    /* CAT-M1 session 동안에는 LPUART1 RX를 gw_catm1으로 직접 라우팅한다.
+     * 이렇게 해야 UI_UART 쪽 dispatch 구현과 무관하게 SIM7080 초기화 URC/SMS Ready/AT 응답을
+     * 안정적으로 CAT-M1 ring buffer가 받는다. */
+    if ((huart == &hlpuart1) && GW_Catm1_IsBusy())
+    {
+        GW_Catm1_UartRxCpltCallback(huart);
+        return;
+    }
+
     UI_UART_RxCpltCallback(huart);
 }
 
 void UI_HAL_UART_ErrorDispatch(UART_HandleTypeDef *huart)
 {
+    if ((huart == &hlpuart1) && GW_Catm1_IsBusy())
+    {
+        GW_Catm1_UartErrorCallback(huart);
+        return;
+    }
+
     UI_UART_ErrorCallback(huart);
-    GW_Catm1_UartErrorCallback(huart);
 }
 
 void UI_HAL_LPUART1_IrqDispatch(void)

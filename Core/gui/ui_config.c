@@ -60,13 +60,13 @@ static void prv_init_defaults(void)
 {
     memset(&s_cfg, 0, sizeof(s_cfg));
 
-    memcpy(s_cfg.net_id, "POSITION#1", UI_NET_ID_LEN);
+    memcpy(s_cfg.net_id, "ABCD123456", UI_NET_ID_LEN);
 
     s_cfg.gw_num    = 0u;
     s_cfg.max_nodes = UI_MAX_NODES;
     s_cfg.node_num  = 0u;
 
-    s_cfg.setting_value = 0u;
+    s_cfg.setting_value = 1u;
     s_cfg.setting_unit  = 'H';
     prv_set_setting_ascii(s_cfg.setting_value, s_cfg.setting_unit);
 
@@ -146,10 +146,11 @@ static void prv_sanitize_cfg(void)
     {
         s_cfg.setting_value = 99u;
     }
-    if ((s_cfg.setting_unit != 'M') && (s_cfg.setting_unit != 'H'))
+    /* legacy 00H / invalid unit는 새 기본값 01H로 정규화 */
+    if ((s_cfg.setting_value == 0u) || ((s_cfg.setting_unit != 'M') && (s_cfg.setting_unit != 'H')))
     {
         s_cfg.setting_unit = 'H';
-        s_cfg.setting_value = 0u;
+        s_cfg.setting_value = 1u;
     }
 
     if (s_cfg.tcpip_port < UI_TCPIP_MIN_PORT)
@@ -306,7 +307,12 @@ void UI_SetNodeNum(uint8_t node_num)
 void UI_SetSetting(uint8_t value, char unit)
 {
     if (value > 99u) { value = 99u; }
-    if ((unit != 'M') && (unit != 'H')) { unit = 'H'; value = 0u; }
+
+    if ((value == 0u) || ((unit != 'M') && (unit != 'H')))
+    {
+        unit = 'H';
+        value = 1u;
+    }
 
     s_cfg.setting_value = value;
     s_cfg.setting_unit  = unit;

@@ -36,7 +36,7 @@ static uint8_t s_time_sync_delta_count = 0u;
 #define GW_CATM1_NTP_TZ_QH            (36)
 #endif
 #ifndef GW_CATM1_STARTUP_CCLK_RETRY
-#define GW_CATM1_STARTUP_CCLK_RETRY   (6u)
+#define GW_CATM1_STARTUP_CCLK_RETRY   (20u)
 #endif
 #ifndef GW_CATM1_STARTUP_CCLK_GAP_MS
 #define GW_CATM1_STARTUP_CCLK_GAP_MS  (500u)
@@ -57,13 +57,13 @@ static uint8_t s_time_sync_delta_count = 0u;
 #define GW_CATM1_HARD_POWEROFF_WAIT_MS (1500u)
 #endif
 #ifndef GW_CATM1_START_SESSION_TIMEOUT_MS
-#define GW_CATM1_START_SESSION_TIMEOUT_MS (12000u)
+#define GW_CATM1_START_SESSION_TIMEOUT_MS (45000u)
 #endif
 #ifndef GW_CATM1_STARTUP_SYNC_ATTEMPTS
-#define GW_CATM1_STARTUP_SYNC_ATTEMPTS   (2u)
+#define GW_CATM1_STARTUP_SYNC_ATTEMPTS   (3u)
 #endif
 #ifndef GW_CATM1_STARTUP_SYNC_RETRY_GAP_MS
-#define GW_CATM1_STARTUP_SYNC_RETRY_GAP_MS (500u)
+#define GW_CATM1_STARTUP_SYNC_RETRY_GAP_MS (1500u)
 #endif
 #ifndef GW_CATM1_STARTUP_REG_WAIT_MS
 #define GW_CATM1_STARTUP_REG_WAIT_MS    (4000u)
@@ -72,27 +72,17 @@ static uint8_t s_time_sync_delta_count = 0u;
 #define GW_CATM1_STARTUP_PS_WAIT_MS     (3000u)
 #endif
 #ifndef GW_CATM1_STARTUP_CCLK_FIRST_TRY
-#define GW_CATM1_STARTUP_CCLK_FIRST_TRY (1u)
+#define GW_CATM1_STARTUP_CCLK_FIRST_TRY (2u)
 #endif
 #ifndef GW_CATM1_STARTUP_CCLK_POST_REG_TRY
-#define GW_CATM1_STARTUP_CCLK_POST_REG_TRY (2u)
+#define GW_CATM1_STARTUP_CCLK_POST_REG_TRY (3u)
 #endif
 #ifndef GW_CATM1_STARTUP_CCLK_POST_ATTACH_TRY
-#define GW_CATM1_STARTUP_CCLK_POST_ATTACH_TRY (1u)
+#define GW_CATM1_STARTUP_CCLK_POST_ATTACH_TRY (2u)
 #endif
 
 #ifndef GW_CATM1_AT_SYNC_MAX_TRY
 #define GW_CATM1_AT_SYNC_MAX_TRY        (4u)
-#endif
-
-#ifndef GW_CATM1_RUNTIME_REG_WAIT_MS
-#define GW_CATM1_RUNTIME_REG_WAIT_MS    (6000u)
-#endif
-#ifndef GW_CATM1_RUNTIME_PS_WAIT_MS
-#define GW_CATM1_RUNTIME_PS_WAIT_MS     (4000u)
-#endif
-#ifndef GW_CATM1_RUNTIME_PDP_WAIT_MS
-#define GW_CATM1_RUNTIME_PDP_WAIT_MS    (4000u)
 #endif
 
 static bool prv_activate_pdp(void);
@@ -1147,14 +1137,7 @@ static bool prv_parse_cereg_stat(const char* rsp, uint8_t* stat)
 
 static bool prv_wait_eps_registered(void)
 {
-    uint32_t timeout_ms = UI_CATM1_NET_REG_TIMEOUT_MS;
-
-    if ((timeout_ms == 0u) || (timeout_ms > GW_CATM1_RUNTIME_REG_WAIT_MS))
-    {
-        timeout_ms = GW_CATM1_RUNTIME_REG_WAIT_MS;
-    }
-
-    return prv_wait_eps_registered_until(timeout_ms);
+    return prv_wait_eps_registered_until(UI_CATM1_NET_REG_TIMEOUT_MS);
 }
 
 static bool prv_wait_eps_registered_until(uint32_t timeout_ms)
@@ -1218,14 +1201,7 @@ static bool prv_parse_cgatt_state(const char* rsp, uint8_t* state)
 
 static bool prv_wait_ps_attached(void)
 {
-    uint32_t timeout_ms = UI_CATM1_PS_ATTACH_TIMEOUT_MS;
-
-    if ((timeout_ms == 0u) || (timeout_ms > GW_CATM1_RUNTIME_PS_WAIT_MS))
-    {
-        timeout_ms = GW_CATM1_RUNTIME_PS_WAIT_MS;
-    }
-
-    return prv_wait_ps_attached_until(timeout_ms);
+    return prv_wait_ps_attached_until(UI_CATM1_PS_ATTACH_TIMEOUT_MS);
 }
 
 static bool prv_wait_ps_attached_until(uint32_t timeout_ms)
@@ -1291,12 +1267,6 @@ static bool prv_activate_pdp(void)
     uint8_t state = 0u;
     uint8_t ip[4] = {0u, 0u, 0u, 0u};
     uint32_t start;
-    uint32_t act_timeout_ms = UI_CATM1_NET_ACT_TIMEOUT_MS;
-
-    if ((act_timeout_ms == 0u) || (act_timeout_ms > GW_CATM1_RUNTIME_PDP_WAIT_MS))
-    {
-        act_timeout_ms = GW_CATM1_RUNTIME_PDP_WAIT_MS;
-    }
 
     /* 1NCE: APN=iot.1nce.net, user/pass blank, PAP */
     (void)snprintf(cmd, sizeof(cmd), "AT+CNCFG=0,1,\"%s\",\"\",\"\",1\r\n", UI_CATM1_1NCE_APN);
@@ -1313,7 +1283,7 @@ static bool prv_activate_pdp(void)
         return true;
     }
 
-    if (!prv_send_cmd_wait("AT+CNACT=0,1\r\n", "OK", "+APP PDP: 0,ACTIVE", NULL, act_timeout_ms, rsp, sizeof(rsp)))
+    if (!prv_send_cmd_wait("AT+CNACT=0,1\r\n", "OK", "+APP PDP: 0,ACTIVE", NULL, UI_CATM1_NET_ACT_TIMEOUT_MS, rsp, sizeof(rsp)))
     {
         return false;
     }
@@ -1330,7 +1300,7 @@ static bool prv_activate_pdp(void)
     }
 
     start = HAL_GetTick();
-    while ((uint32_t)(HAL_GetTick() - start) < act_timeout_ms)
+    while ((uint32_t)(HAL_GetTick() - start) < UI_CATM1_NET_ACT_TIMEOUT_MS)
     {
         prv_delay_ms(300u);
 
