@@ -1,0 +1,15 @@
+../Core/gui/gw_w25q128.c:64:13:prv_cs_high	1
+../Core/gui/gw_w25q128.c:71:13:prv_cs_low	1
+../Core/gui/gw_w25q128.c:93:13:prv_tx	1
+../Core/gui/gw_w25q128.c:159:13:prv_release_power_down	1
+../Core/gui/gw_w25q128.c:103:13:prv_cmd_only	1
+../Core/gui/gw_w25q128.c:78:13:prv_spi_ensure_ready	3
+../Core/gui/gw_w25q128.c:133:13:prv_wait_ready	5
+../Core/gui/gw_w25q128.c:191:6:GW_W25Q128_Init	5
+../Core/gui/gw_w25q128.c:212:6:GW_W25Q128_IsReady	1
+../Core/gui/gw_w25q128.c:217:6:GW_Storage_W25Q_PowerOn	3
+../Core/gui/gw_w25q128.c:230:6:GW_Storage_W25Q_PowerDown	2
+../Core/gui/gw_w25q128.c:240:5:GW_Storage_W25Q_Read	6
+../Core/gui/gw_w25q128.c:274:5:GW_Storage_W25Q_Prog	9
+../Core/gui/gw_w25q128.c:329:5:GW_Storage_W25Q_Erase4K	4
+../Core/gui/gw_w25q128.c:358:5:GW_Storage_W25Q_Sync	1

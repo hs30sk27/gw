@@ -1,0 +1,12 @@
+../Core/gui/ui_config.c:124:13:prv_sanitize_cfg	10
+../Core/gui/ui_config.c:201:13:prv_load_from_flash	6
+../Core/gui/ui_config.c:215:20:UI_GetConfig	2
+../Core/gui/ui_config.c:226:6:UI_Config_Save	6
+../Core/gui/ui_config.c:283:6:UI_SetNetId	1
+../Core/gui/ui_config.c:288:6:UI_SetGwNum	1
+../Core/gui/ui_config.c:294:6:UI_SetMaxNodes	1
+../Core/gui/ui_config.c:301:6:UI_SetNodeNum	1
+../Core/gui/ui_config.c:307:6:UI_SetSetting	5
+../Core/gui/ui_config.c:322:6:UI_SetTcpIp	1
+../Core/gui/ui_config.c:328:6:UI_SetLocAscii	2
+../Core/gui/ui_config.c:340:13:UI_GetLocAscii	1
