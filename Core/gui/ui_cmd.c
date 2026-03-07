@@ -130,7 +130,8 @@ static void prv_send_setting_read(void)
     (void)snprintf(line, sizeof(line), "NETID:%s\r\n", netid);
     UI_UART_SendString(line);
 
-    (void)snprintf(line, sizeof(line), "ND NUM:%u\r\n", cfg->node_num);
+    /* GW에서는 ND NUM을 노드 개수(1..50) 의미로 사용 */
+    (void)snprintf(line, sizeof(line), "ND NUM:%u\r\n", cfg->max_nodes);
     UI_UART_SendString(line);
 
     (void)snprintf(line, sizeof(line), "SETTING:%c%c%c\r\n",
@@ -245,20 +246,21 @@ void UI_Cmd_ProcessLine(const char* line_in)
         return;
     }
 
-    /* -------------------- ND NUM:xx ---------------------- */
-    if (strncmp(p, "ND NUM:", 7) == 0)
+    /* -------------------- ND NUM:xx / GW ND NUM:xx ------ */
+    if ((strncmp(p, "ND NUM:", 7) == 0) || (strncmp(p, "GW ND NUM:", 10) == 0))
     {
+        const char* q = (strncmp(p, "GW ND NUM:", 10) == 0) ? (p + 10) : (p + 7);
         uint8_t v = 0;
-        if (prv_parse_u8_dec(p + 7, &v) <= 0)
+        if (prv_parse_u8_dec(q, &v) <= 0)
         {
             prv_send_error();
             return;
         }
 
-        /* ND: ND NUM:xx = 자기 노드 번호 설정 (0..49) */
-        if (v < UI_MAX_NODES)
+        /* GW: ND NUM:xx = 수신할 노드 개수 (1..50) */
+        if ((v >= 1u) && (v <= UI_MAX_NODES))
         {
-            UI_SetNodeNum(v);
+            UI_SetMaxNodes(v);
             (void)prv_commit_config_changed();
         }
         else
