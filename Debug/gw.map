@@ -12210,7 +12210,7 @@ LOAD C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.ext
 .iplt           0x0801202c        0x0
  .iplt          0x0801202c        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp/crtbegin.o
 
-.rodata         0x0801202c     0x17e4
+.rodata         0x0801202c     0x17cc
                 0x0801202c                        . = ALIGN (0x4)
  *(.rodata)
  .rodata        0x0801202c       0x18 ./Core/lfs/lfs.o
@@ -12222,347 +12222,346 @@ LOAD C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.ext
                 0x0801206c       0x18 ./Core/Src/stm32_lpm_if.o
                 0x0801206c                UTIL_PowerDriver
  .rodata.tiny_snprintf_like.constprop.0.str1.1
-                0x08012084     0x11c9 ./Core/Src/sys_app.o
+                0x08012084     0x11b4 ./Core/Src/sys_app.o
                                   0x9 (size before relaxing)
- *fill*         0x0801324d        0x3 
  .rodata.MSIRangeTable
-                0x08013250       0x40 ./Core/Src/system_stm32wlxx.o
-                0x08013250                MSIRangeTable
+                0x08013238       0x40 ./Core/Src/system_stm32wlxx.o
+                0x08013238                MSIRangeTable
  .rodata.APBPrescTable
-                0x08013290       0x20 ./Core/Src/system_stm32wlxx.o
-                0x08013290                APBPrescTable
+                0x08013278       0x20 ./Core/Src/system_stm32wlxx.o
+                0x08013278                APBPrescTable
  .rodata.AHBPrescTable
-                0x080132b0       0x40 ./Core/Src/system_stm32wlxx.o
-                0x080132b0                AHBPrescTable
+                0x08013298       0x40 ./Core/Src/system_stm32wlxx.o
+                0x08013298                AHBPrescTable
  .rodata.UTIL_SYSTIMDriver
-                0x080132f0       0x14 ./Core/Src/timer_if.o
-                0x080132f0                UTIL_SYSTIMDriver
+                0x080132d8       0x14 ./Core/Src/timer_if.o
+                0x080132d8                UTIL_SYSTIMDriver
  .rodata.UTIL_TimerDriver
-                0x08013304       0x2c ./Core/Src/timer_if.o
-                0x08013304                UTIL_TimerDriver
+                0x080132ec       0x2c ./Core/Src/timer_if.o
+                0x080132ec                UTIL_TimerDriver
  .rodata.UTIL_TraceDriver
-                0x08013330       0x10 ./Core/Src/usart_if.o
-                0x08013330                UTIL_TraceDriver
+                0x08013318       0x10 ./Core/Src/usart_if.o
+                0x08013318                UTIL_TraceDriver
  .rodata.prv_parse_cnact_ctx0.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x3f (size before relaxing)
  .rodata.prv_uart_wait_for.constprop.0.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x11 (size before relaxing)
  .rodata.prv_enable_network_time_auto_update.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x1b (size before relaxing)
  .rodata.prv_open_tcp.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x41 (size before relaxing)
  .rodata.prv_send_query_wait_prefix_ok.constprop.0.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x15 (size before relaxing)
  .rodata.prv_query_caack.constprop.0.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x23 (size before relaxing)
  .rodata.prv_send_tcp_payload.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x16 (size before relaxing)
  .rodata.prv_wait_ps_attached_until.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x29 (size before relaxing)
  .rodata.prv_wait_eps_registered_until.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x2f (size before relaxing)
  .rodata.prv_query_network_time_epoch_retry.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x34 (size before relaxing)
  .rodata.prv_send_query_wait_cnact_ok.constprop.0.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                   0xc (size before relaxing)
  .rodata.prv_activate_pdp.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x4b (size before relaxing)
  .rodata.prv_sync_time_from_modem_startup.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x62 (size before relaxing)
  .rodata.prv_build_snapshot_payload.constprop.0.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
-                                 0xa6 (size before relaxing)
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
+                                 0x91 (size before relaxing)
  .rodata.prv_start_session.constprop.0.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x22 (size before relaxing)
  .rodata.GW_Catm1_PowerOff.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                  0x1f (size before relaxing)
  .rodata.GW_Catm1_SendSnapshot.str1.1
-                0x08013340        0x0 ./Core/gui/gw_catm1.o
+                0x08013328        0x0 ./Core/gui/gw_catm1.o
                                   0xf (size before relaxing)
  .rodata.s_days.0
-                0x08013340        0xc ./Core/gui/gw_catm1.o
+                0x08013328        0xc ./Core/gui/gw_catm1.o
  .rodata.prv_collect_files.str1.1
-                0x0801334c        0x0 ./Core/gui/gw_storage.o
+                0x08013334        0x0 ./Core/gui/gw_storage.o
                                   0xe (size before relaxing)
  .rodata.GW_Storage_SaveHourRec.str1.1
-                0x0801334c        0x0 ./Core/gui/gw_storage.o
+                0x08013334        0x0 ./Core/gui/gw_storage.o
                                  0x18 (size before relaxing)
  .rodata.GW_Storage_PurgeOldFiles.str1.1
-                0x0801334c        0x0 ./Core/gui/gw_storage.o
+                0x08013334        0x0 ./Core/gui/gw_storage.o
                                   0xa (size before relaxing)
  .rodata.s_lfs_cfg
-                0x0801334c       0x54 ./Core/gui/gw_storage.o
+                0x08013334       0x54 ./Core/gui/gw_storage.o
  .rodata.prv_serial_init_after_ble_delay.str1.1
-                0x080133a0        0x0 ./Core/gui/ui_ble.o
+                0x08013388        0x0 ./Core/gui/ui_ble.o
                                   0x5 (size before relaxing)
  .rodata.prv_send_error.str1.1
-                0x080133a0        0x0 ./Core/gui/ui_cmd.o
+                0x08013388        0x0 ./Core/gui/ui_cmd.o
                                   0x8 (size before relaxing)
  .rodata.prv_commit_config_changed.isra.0.str1.1
-                0x080133a0        0x0 ./Core/gui/ui_cmd.o
+                0x08013388        0x0 ./Core/gui/ui_cmd.o
                                   0x5 (size before relaxing)
  .rodata.UI_Cmd_ProcessLine.str1.1
-                0x080133a0        0x0 ./Core/gui/ui_cmd.o
+                0x08013388        0x0 ./Core/gui/ui_cmd.o
                                  0xa0 (size before relaxing)
  .rodata.UI_GetConfig.str1.1
-                0x080133a0        0x0 ./Core/gui/ui_config.o
+                0x08013388        0x0 ./Core/gui/ui_config.o
                                   0xb (size before relaxing)
  .rodata.s_data_freq_hz
-                0x080133a0       0x18 ./Core/gui/ui_rf_plan_kr920.o
+                0x08013388       0x18 ./Core/gui/ui_rf_plan_kr920.o
  .rodata.UI_Time_SetFromString.str1.1
-                0x080133b8        0x0 ./Core/gui/ui_time.o
+                0x080133a0        0x0 ./Core/gui/ui_time.o
                                  0x3a (size before relaxing)
  .rodata.UI_Time_FormatNow.str1.1
-                0x080133b8        0x0 ./Core/gui/ui_time.o
+                0x080133a0        0x0 ./Core/gui/ui_time.o
                                  0x28 (size before relaxing)
- .rodata.dim.0  0x080133b8        0xc ./Core/gui/ui_time.o
+ .rodata.dim.0  0x080133a0        0xc ./Core/gui/ui_time.o
  .rodata.lfs_fs_preporphans.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x7e (size before relaxing)
  .rodata.lfs_bd_read.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x37 (size before relaxing)
  .rodata.lfs_path_islast.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                   0x2 (size before relaxing)
  .rodata.lfs_bd_erase.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x19 (size before relaxing)
  .rodata.lfs_tortoise_detectcycles.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x2c (size before relaxing)
  .rodata.lfs_dir_traverse.constprop.0.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                   0x7 (size before relaxing)
  .rodata.lfs_dir_fetchmatch.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x35 (size before relaxing)
  .rodata.lfs_dir_find.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                   0x3 (size before relaxing)
  .rodata.lfs_alloc.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x29 (size before relaxing)
  .rodata.lfs_init.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                 0x501 (size before relaxing)
  .rodata.lfs_bd_flush.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x21 (size before relaxing)
  .rodata.lfs_bd_prog.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x7d (size before relaxing)
  .rodata.lfs_file_relocate.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x23 (size before relaxing)
  .rodata.lfs_file_write_.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x2d (size before relaxing)
  .rodata.lfs_dir_compact.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x5c (size before relaxing)
  .rodata.lfs_dir_relocatingcommit.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x9d (size before relaxing)
  .rodata.lfs_dir_orphaningcommit.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0xa4 (size before relaxing)
  .rodata.lfs_fs_deorphan.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0xb8 (size before relaxing)
  .rodata.lfs_fs_forceconsistency.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x96 (size before relaxing)
  .rodata.lfs_format.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x1f (size before relaxing)
  .rodata.lfs_mount.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                 0x19e (size before relaxing)
  .rodata.lfs_remove.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x23 (size before relaxing)
  .rodata.lfs_file_open.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x37 (size before relaxing)
  .rodata.lfs_file_close.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x36 (size before relaxing)
  .rodata.lfs_file_read.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x2d (size before relaxing)
  .rodata.lfs_dir_open.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                  0x36 (size before relaxing)
  .rodata.lfs_dir_read.str1.1
-                0x080133c4        0x0 ./Core/lfs/lfs.o
+                0x080133ac        0x0 ./Core/lfs/lfs.o
                                   0x2 (size before relaxing)
  .rodata.__func__.1
-                0x080133c4        0xd ./Core/lfs/lfs.o
+                0x080133ac        0xd ./Core/lfs/lfs.o
  .rodata.__func__.6
-                0x080133d1        0xe ./Core/lfs/lfs.o
+                0x080133b9        0xe ./Core/lfs/lfs.o
  .rodata.__func__.7
-                0x080133df       0x10 ./Core/lfs/lfs.o
+                0x080133c7       0x10 ./Core/lfs/lfs.o
  .rodata.__func__.8
-                0x080133ef        0xf ./Core/lfs/lfs.o
+                0x080133d7        0xf ./Core/lfs/lfs.o
  .rodata.__func__.9
-                0x080133fe        0xf ./Core/lfs/lfs.o
+                0x080133e6        0xf ./Core/lfs/lfs.o
  .rodata.__func__.10
-                0x0801340d        0xe ./Core/lfs/lfs.o
+                0x080133f5        0xe ./Core/lfs/lfs.o
  .rodata.__func__.11
-                0x0801341b        0xe ./Core/lfs/lfs.o
+                0x08013403        0xe ./Core/lfs/lfs.o
  .rodata.__func__.12
-                0x08013429        0xf ./Core/lfs/lfs.o
+                0x08013411        0xf ./Core/lfs/lfs.o
  .rodata.defaults.14
-                0x08013438        0xc ./Core/lfs/lfs.o
+                0x08013420        0xc ./Core/lfs/lfs.o
  .rodata.__func__.15
-                0x08013444        0xe ./Core/lfs/lfs.o
+                0x0801342c        0xe ./Core/lfs/lfs.o
  .rodata.__func__.17
-                0x08013452        0xe ./Core/lfs/lfs.o
+                0x0801343a        0xe ./Core/lfs/lfs.o
  .rodata.__func__.18
-                0x08013460        0xc ./Core/lfs/lfs.o
+                0x08013448        0xc ./Core/lfs/lfs.o
  .rodata.__func__.19
-                0x0801346c       0x10 ./Core/lfs/lfs.o
+                0x08013454       0x10 ./Core/lfs/lfs.o
  .rodata.__func__.20
-                0x0801347c        0xc ./Core/lfs/lfs.o
+                0x08013464        0xc ./Core/lfs/lfs.o
  .rodata.__func__.21
-                0x08013488       0x11 ./Core/lfs/lfs.o
+                0x08013470       0x11 ./Core/lfs/lfs.o
  .rodata.__func__.22
-                0x08013499       0x19 ./Core/lfs/lfs.o
+                0x08013481       0x19 ./Core/lfs/lfs.o
  .rodata.__func__.23
-                0x080134b2       0x13 ./Core/lfs/lfs.o
+                0x0801349a       0x13 ./Core/lfs/lfs.o
  .rodata.__func__.24
-                0x080134c5        0xd ./Core/lfs/lfs.o
+                0x080134ad        0xd ./Core/lfs/lfs.o
  .rodata.__func__.25
-                0x080134d2        0xc ./Core/lfs/lfs.o
+                0x080134ba        0xc ./Core/lfs/lfs.o
  .rodata.__func__.26
-                0x080134de        0xd ./Core/lfs/lfs.o
+                0x080134c6        0xd ./Core/lfs/lfs.o
  .rodata.__func__.27
-                0x080134eb       0x18 ./Core/lfs/lfs.o
+                0x080134d3       0x18 ./Core/lfs/lfs.o
  .rodata.__func__.28
-                0x08013503        0xc ./Core/lfs/lfs.o
+                0x080134eb        0xc ./Core/lfs/lfs.o
  .rodata.__func__.29
-                0x0801350f        0x9 ./Core/lfs/lfs.o
+                0x080134f7        0x9 ./Core/lfs/lfs.o
  .rodata.__func__.30
-                0x08013518        0xc ./Core/lfs/lfs.o
+                0x08013500        0xc ./Core/lfs/lfs.o
  .rodata.rtable.0
-                0x08013524       0x40 ./Core/lfs/lfs_util.o
+                0x0801350c       0x40 ./Core/lfs/lfs_util.o
  .rodata.UARTPrescTable
-                0x08013564       0x18 ./Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_uart.o
-                0x08013564                UARTPrescTable
+                0x0801354c       0x18 ./Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_uart.o
+                0x0801354c                UARTPrescTable
  .rodata.denominator.0
-                0x0801357c        0x8 ./Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_uart_ex.o
+                0x08013564        0x8 ./Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_uart_ex.o
  .rodata.numerator.1
-                0x08013584        0x8 ./Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_uart_ex.o
+                0x0801356c        0x8 ./Drivers/STM32WLxx_HAL_Driver/Src/stm32wlxx_hal_uart_ex.o
  .rodata.CSWTCH.77
-                0x0801358c        0x4 ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio.o
+                0x08013574        0x4 ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio.o
  .rodata.CSWTCH.57
-                0x08013590       0x2c ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio.o
+                0x08013578       0x2c ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio.o
  .rodata.Bandwidths
-                0x080135bc        0x3 ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio.o
-                0x080135bc                Bandwidths
- *fill*         0x080135bf        0x1 
- .rodata.Radio  0x080135c0       0x8c ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio.o
-                0x080135c0                Radio
+                0x080135a4        0x3 ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio.o
+                0x080135a4                Bandwidths
+ *fill*         0x080135a7        0x1 
+ .rodata.Radio  0x080135a8       0x8c ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio.o
+                0x080135a8                Radio
  .rodata.FskBandwidths
-                0x0801364c       0xb0 ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.o
+                0x08013634       0xb0 ./Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.o
  .rodata.tiny_vsnprintf_like.str1.1
-                0x080136fc        0x0 ./Utilities/misc/stm32_tiny_vsnprintf.o
+                0x080136e4        0x0 ./Utilities/misc/stm32_tiny_vsnprintf.o
                                  0x51 (size before relaxing)
  .rodata.SEQ_clz_table_4bit
-                0x080136fc       0x10 ./Utilities/sequencer/stm32_seq.o
-                0x080136fc                SEQ_clz_table_4bit
+                0x080136e4       0x10 ./Utilities/sequencer/stm32_seq.o
+                0x080136e4                SEQ_clz_table_4bit
  .rodata.__assert_func.str1.1
-                0x0801370c        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-assert.o)
+                0x080136f4        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-assert.o)
                                  0x3d (size before relaxing)
  .rodata._ctype_
-                0x0801370c      0x101 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-ctype_.o)
-                0x0801370c                _ctype_
+                0x080136f4      0x101 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-ctype_.o)
+                0x080136f4                _ctype_
  .rodata._svfprintf_r.str1.1
-                0x0801380d        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-svfprintf.o)
+                0x080137f5        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-svfprintf.o)
                                  0x11 (size before relaxing)
  .rodata.__ssvfscanf_r.str1.1
-                0x0801380d        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-svfscanf.o)
+                0x080137f5        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-svfscanf.o)
                                   0x4 (size before relaxing)
  .rodata._vfprintf_r.str1.1
-                0x0801380d        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-vfprintf.o)
+                0x080137f5        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-vfprintf.o)
                                  0x11 (size before relaxing)
  .rodata._printf_i.str1.1
-                0x0801380d        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-vfprintf_i.o)
+                0x080137f5        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-vfprintf_i.o)
                                  0x22 (size before relaxing)
  .rodata._scanf_i.str1.1
-                0x0801380d        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-vfscanf_i.o)
+                0x080137f5        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-vfscanf_i.o)
                                  0x12 (size before relaxing)
  .rodata.str1.1
-                0x0801380d        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-vfscanf_i.o)
+                0x080137f5        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-nano-vfscanf_i.o)
                                   0x9 (size before relaxing)
-                0x08013810                        . = ALIGN (0x4)
- *fill*         0x0801380d        0x3 
+                0x080137f8                        . = ALIGN (0x4)
+ *fill*         0x080137f5        0x3 
 
-.ARM.extab      0x08013810        0x0
-                0x08013810                        . = ALIGN (0x4)
+.ARM.extab      0x080137f8        0x0
+                0x080137f8                        . = ALIGN (0x4)
  *(.ARM.extab* .gnu.linkonce.armextab.*)
-                0x08013810                        . = ALIGN (0x4)
+                0x080137f8                        . = ALIGN (0x4)
 
-.ARM            0x08013810        0x8
-                0x08013810                        . = ALIGN (0x4)
-                0x08013810                        __exidx_start = .
+.ARM            0x080137f8        0x8
+                0x080137f8                        . = ALIGN (0x4)
+                0x080137f8                        __exidx_start = .
  *(.ARM.exidx*)
- .ARM.exidx     0x08013810        0x8 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-strcmp.o)
- .ARM.exidx     0x08013818        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-strlen.o)
+ .ARM.exidx     0x080137f8        0x8 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-strcmp.o)
+ .ARM.exidx     0x08013800        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-strlen.o)
                                   0x8 (size before relaxing)
- .ARM.exidx     0x08013818        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-memchr.o)
+ .ARM.exidx     0x08013800        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m/nofp\libc_nano.a(libc_a-memchr.o)
                                   0x8 (size before relaxing)
- .ARM.exidx     0x08013818        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp\libgcc.a(_udivmoddi4.o)
+ .ARM.exidx     0x08013800        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp\libgcc.a(_udivmoddi4.o)
                                   0x8 (size before relaxing)
-                0x08013818                        __exidx_end = .
-                0x08013818                        . = ALIGN (0x4)
+                0x08013800                        __exidx_end = .
+                0x08013800                        . = ALIGN (0x4)
 
-.preinit_array  0x08013818        0x0
-                0x08013818                        . = ALIGN (0x4)
-                0x08013818                        PROVIDE (__preinit_array_start = .)
+.preinit_array  0x08013800        0x0
+                0x08013800                        . = ALIGN (0x4)
+                0x08013800                        PROVIDE (__preinit_array_start = .)
  *(.preinit_array*)
-                0x08013818                        PROVIDE (__preinit_array_end = .)
-                0x08013818                        . = ALIGN (0x4)
+                0x08013800                        PROVIDE (__preinit_array_end = .)
+                0x08013800                        . = ALIGN (0x4)
 
-.init_array     0x08013818        0x4
-                0x08013818                        . = ALIGN (0x4)
-                0x08013818                        PROVIDE (__init_array_start = .)
+.init_array     0x08013800        0x4
+                0x08013800                        . = ALIGN (0x4)
+                0x08013800                        PROVIDE (__init_array_start = .)
  *(SORT_BY_NAME(.init_array.*))
  *(.init_array*)
- .init_array    0x08013818        0x4 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp/crtbegin.o
-                0x0801381c                        PROVIDE (__init_array_end = .)
-                0x0801381c                        . = ALIGN (0x4)
+ .init_array    0x08013800        0x4 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp/crtbegin.o
+                0x08013804                        PROVIDE (__init_array_end = .)
+                0x08013804                        . = ALIGN (0x4)
 
-.fini_array     0x0801381c        0x4
-                0x0801381c                        . = ALIGN (0x4)
+.fini_array     0x08013804        0x4
+                0x08013804                        . = ALIGN (0x4)
                 [!provide]                        PROVIDE (__fini_array_start = .)
  *(SORT_BY_NAME(.fini_array.*))
  *(.fini_array*)
- .fini_array    0x0801381c        0x4 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp/crtbegin.o
+ .fini_array    0x08013804        0x4 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp/crtbegin.o
                 [!provide]                        PROVIDE (__fini_array_end = .)
-                0x08013820                        . = ALIGN (0x4)
-                0x08013820                        _sidata = LOADADDR (.data)
+                0x08013808                        . = ALIGN (0x4)
+                0x08013808                        _sidata = LOADADDR (.data)
 
-.rel.dyn        0x08013820        0x0
- .rel.iplt      0x08013820        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp/crtbegin.o
+.rel.dyn        0x08013808        0x0
+ .rel.iplt      0x08013808        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp/crtbegin.o
 
-.data           0x20000000       0x7c load address 0x08013820
+.data           0x20000000       0x7c load address 0x08013808
                 0x20000000                        . = ALIGN (0x4)
                 0x20000000                        _sdata = .
  *(.data)
@@ -12603,11 +12602,11 @@ LOAD C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.ext
                 0x2000007c                        . = ALIGN (0x4)
                 0x2000007c                        _edata = .
 
-.igot.plt       0x2000007c        0x0 load address 0x0801389c
+.igot.plt       0x2000007c        0x0 load address 0x08013884
  .igot.plt      0x2000007c        0x0 C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712/tools/bin/../lib/gcc/arm-none-eabi/13.3.1/thumb/v7e-m/nofp/crtbegin.o
                 0x2000007c                        . = ALIGN (0x4)
 
-.bss            0x20000080     0x1638 load address 0x0801389c
+.bss            0x20000080     0x1638 load address 0x08013884
                 0x20000080                        _sbss = .
                 0x20000080                        __bss_start__ = _sbss
  *(.bss)
@@ -12864,7 +12863,7 @@ LOAD C:/ST/STM32CubeIDE_1.19.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.ext
                 0x200016b8                        __bss_end__ = _ebss
 
 ._user_heap_stack
-                0x200016b8     0x1400 load address 0x0801389c
+                0x200016b8     0x1400 load address 0x08013884
                 0x200016b8                        . = ALIGN (0x8)
                 [!provide]                        PROVIDE (end = .)
                 0x200016b8                        PROVIDE (_end = .)

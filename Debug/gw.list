@@ -7,23 +7,23 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   CONTENTS, ALLOC, LOAD, READONLY, DATA
   1 .text         00011eec  08000140  08000140  00001140  2**4
                   CONTENTS, ALLOC, LOAD, READONLY, CODE
-  2 .rodata       000017e4  0801202c  0801202c  0001302c  2**2
+  2 .rodata       000017cc  0801202c  0801202c  0001302c  2**2
                   CONTENTS, ALLOC, LOAD, READONLY, DATA
-  3 .ARM.extab    00000000  08013810  08013810  0001507c  2**0
+  3 .ARM.extab    00000000  080137f8  080137f8  0001507c  2**0
                   CONTENTS, READONLY
-  4 .ARM          00000008  08013810  08013810  00014810  2**2
+  4 .ARM          00000008  080137f8  080137f8  000147f8  2**2
                   CONTENTS, ALLOC, LOAD, READONLY, DATA
-  5 .preinit_array 00000000  08013818  08013818  0001507c  2**0
+  5 .preinit_array 00000000  08013800  08013800  0001507c  2**0
                   CONTENTS, ALLOC, LOAD, DATA
-  6 .init_array   00000004  08013818  08013818  00014818  2**2
+  6 .init_array   00000004  08013800  08013800  00014800  2**2
                   CONTENTS, ALLOC, LOAD, READONLY, DATA
-  7 .fini_array   00000004  0801381c  0801381c  0001481c  2**2
+  7 .fini_array   00000004  08013804  08013804  00014804  2**2
                   CONTENTS, ALLOC, LOAD, READONLY, DATA
-  8 .data         0000007c  20000000  08013820  00015000  2**2
+  8 .data         0000007c  20000000  08013808  00015000  2**2
                   CONTENTS, ALLOC, LOAD, DATA
-  9 .bss          00001638  20000080  0801389c  00015080  2**3
+  9 .bss          00001638  20000080  08013884  00015080  2**3
                   ALLOC
- 10 ._user_heap_stack 00001400  200016b8  0801389c  000156b8  2**0
+ 10 ._user_heap_stack 00001400  200016b8  08013884  000156b8  2**0
                   ALLOC
  11 .ARM.attributes 0000002a  00000000  00000000  0001507c  2**0
                   CONTENTS, READONLY
@@ -3111,7 +3111,7 @@ LoopForever:
   ldr r1, =_edata
  8001290:	2000007c 	.word	0x2000007c
   ldr r2, =_sidata
- 8001294:	08013820 	.word	0x08013820
+ 8001294:	08013808 	.word	0x08013808
   ldr r2, =_sbss
  8001298:	20000080 	.word	0x20000080
   ldr r4, =_ebss
@@ -3177,7 +3177,7 @@ static bool prv_radio_ready_for_rx(void)
     return true;
 }
  80012de:	4770      	bx	lr
- 80012e0:	080135c0 	.word	0x080135c0
+ 80012e0:	080135a8 	.word	0x080135a8
 
 080012e4 <prv_next_event_centi>:
      * RX/TCP 기준 시각은 기존 요구(30초/40초/90초)를 유지한다. */
@@ -4009,7 +4009,7 @@ static void prv_flash_tx_note_saved(bool saved_ok)
  800179c:	20000380 	.word	0x20000380
  80017a0:	20000961 	.word	0x20000961
  80017a4:	20000365 	.word	0x20000365
- 80017a8:	080135c0 	.word	0x080135c0
+ 80017a8:	080135a8 	.word	0x080135a8
 
 080017ac <prv_arm_rx_slot>:
 {
@@ -4041,7 +4041,7 @@ static void prv_flash_tx_note_saved(bool saved_ok)
     return true;
  80017d8:	e7ed      	b.n	80017b6 <prv_arm_rx_slot+0xa>
  80017da:	bf00      	nop
- 80017dc:	080135c0 	.word	0x080135c0
+ 80017dc:	080135a8 	.word	0x080135a8
  80017e0:	20000920 	.word	0x20000920
 
 080017e4 <prv_is_event_due_now.constprop.0>:
@@ -4540,7 +4540,7 @@ static void prv_rx_next_slot(void)
             prv_flash_tx_resync_after_storage_change();
  8001b22:	f7ff fce5 	bl	80014f0 <prv_flash_tx_resync_after_storage_change>
  8001b26:	e7c2      	b.n	8001aae <prv_rx_next_slot+0x2a>
- 8001b28:	080135c0 	.word	0x080135c0
+ 8001b28:	080135a8 	.word	0x080135a8
  8001b2c:	20000925 	.word	0x20000925
  8001b30:	20000924 	.word	0x20000924
  8001b34:	20000961 	.word	0x20000961
@@ -4844,7 +4844,7 @@ static void prv_rx_next_slot(void)
  8001d4c:	20000385 	.word	0x20000385
  8001d50:	2000092c 	.word	0x2000092c
  8001d54:	20000961 	.word	0x20000961
- 8001d58:	080135c0 	.word	0x080135c0
+ 8001d58:	080135a8 	.word	0x080135a8
  8001d5c:	20000926 	.word	0x20000926
  8001d60:	20000384 	.word	0x20000384
  8001d64:	2000091d 	.word	0x2000091d
@@ -6535,7 +6535,7 @@ static bool prv_query_caack(uint32_t* out_total, uint32_t* out_unack)
  8002906:	f7fe facd 	bl	8000ea4 <HAL_Delay>
  800290a:	e7eb      	b.n	80028e4 <prv_send_tcp_payload+0x94>
  800290c:	08012162 	.word	0x08012162
- 8002910:	08013177 	.word	0x08013177
+ 8002910:	08013162 	.word	0x08013162
  8002914:	20000238 	.word	0x20000238
  8002918:	080120d7 	.word	0x080120d7
 
@@ -7775,13 +7775,13 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
  8003284:	f7ff f935 	bl	80024f2 <prv_append_fmt.constprop.0>
  8003288:	e7ef      	b.n	800326a <prv_build_snapshot_payload.constprop.0+0x28e>
  800328a:	bf00      	nop
- 800328c:	08013245 	.word	0x08013245
+ 800328c:	08013230 	.word	0x08013230
  8003290:	00015180 	.word	0x00015180
- 8003294:	08013340 	.word	0x08013340
+ 8003294:	08013328 	.word	0x08013328
  8003298:	080122bb 	.word	0x080122bb
  800329c:	08012312 	.word	0x08012312
  80032a0:	080122d9 	.word	0x080122d9
- 80032a4:	08012355 	.word	0x08012355
+ 80032a4:	08012340 	.word	0x08012340
 
 080032a8 <GW_Catm1_UartRxCpltCallback>:
 
@@ -8064,11 +8064,11 @@ static bool prv_start_session(bool enable_time_auto_update)
  8003486:	f7fe ff65 	bl	8002354 <prv_wait_rx_quiet>
  800348a:	e7e6      	b.n	800345a <prv_start_session.constprop.0+0x102>
  800348c:	20000bbd 	.word	0x20000bbd
- 8003490:	0801235f 	.word	0x0801235f
- 8003494:	08012369 	.word	0x08012369
+ 8003490:	0801234a 	.word	0x0801234a
+ 8003494:	08012354 	.word	0x08012354
  8003498:	080120d7 	.word	0x080120d7
- 800349c:	0801236e 	.word	0x0801236e
- 80034a0:	08012375 	.word	0x08012375
+ 800349c:	08012359 	.word	0x08012359
+ 80034a0:	08012360 	.word	0x08012360
  80034a4:	08012259 	.word	0x08012259
  80034a8:	08012260 	.word	0x08012260
  80034ac:	0801226b 	.word	0x0801226b
@@ -8143,8 +8143,8 @@ void GW_Catm1_PowerOff(void)
  800352e:	e7e1      	b.n	80034f4 <GW_Catm1_PowerOff+0x34>
  8003530:	20000bbd 	.word	0x20000bbd
  8003534:	080120d7 	.word	0x080120d7
- 8003538:	08012381 	.word	0x08012381
- 800353c:	08012393 	.word	0x08012393
+ 8003538:	0801236c 	.word	0x0801236c
+ 800353c:	0801237e 	.word	0x0801237e
  8003540:	48000400 	.word	0x48000400
 
 08003544 <GW_Catm1_IsBusy>:
@@ -8337,7 +8337,7 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
  8003644:	20000bbe 	.word	0x20000bbe
  8003648:	00015f90 	.word	0x00015f90
  800364c:	080120d7 	.word	0x080120d7
- 8003650:	080123a0 	.word	0x080123a0
+ 8003650:	0801238b 	.word	0x0801238b
 
 08003654 <GW_Catm1_SendStoredRange>:
 
@@ -8499,7 +8499,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
  8003750:	20000bbe 	.word	0x20000bbe
  8003754:	00015f90 	.word	0x00015f90
  8003758:	080120d7 	.word	0x080120d7
- 800375c:	080123a0 	.word	0x080123a0
+ 800375c:	0801238b 	.word	0x0801238b
 
 08003760 <prv_adc_read.constprop.0>:
         MX_ADC_Init();
@@ -8971,10 +8971,10 @@ static uint16_t prv_collect_files(GW_StorageFileInfo_t* out, uint16_t max_items)
  8003a3e:	bf00      	nop
  8003a40:	08012200 	.word	0x08012200
  8003a44:	20000de0 	.word	0x20000de0
- 8003a48:	080123c2 	.word	0x080123c2
+ 8003a48:	080123ad 	.word	0x080123ad
  8003a4c:	080038dd 	.word	0x080038dd
- 8003a50:	080123b0 	.word	0x080123b0
- 8003a54:	080123af 	.word	0x080123af
+ 8003a50:	0801239b 	.word	0x0801239b
+ 8003a54:	0801239a 	.word	0x0801239a
 
 08003a58 <prv_mount_fs>:
 {
@@ -9013,7 +9013,7 @@ static uint16_t prv_collect_files(GW_StorageFileInfo_t* out, uint16_t max_items)
 }
  8003a90:	4620      	mov	r0, r4
  8003a92:	bd38      	pop	{r3, r4, r5, pc}
- 8003a94:	0801334c 	.word	0x0801334c
+ 8003a94:	08013334 	.word	0x08013334
  8003a98:	20000de0 	.word	0x20000de0
 
 08003a9c <prv_unmount_fs>:
@@ -9229,8 +9229,8 @@ bool GW_Storage_SaveHourRec(const GW_HourRec_t* rec)
  8003bd4:	fab4 f084 	clz	r0, r4
  8003bd8:	0940      	lsrs	r0, r0, #5
  8003bda:	e799      	b.n	8003b10 <GW_Storage_SaveHourRec+0xc>
- 8003bdc:	080123c7 	.word	0x080123c7
- 8003be0:	080123b3 	.word	0x080123b3
+ 8003bdc:	080123b2 	.word	0x080123b2
+ 8003be0:	0801239e 	.word	0x0801239e
  8003be4:	20000de0 	.word	0x20000de0
 
 08003be8 <GW_Storage_PurgeOldFiles>:
@@ -9348,9 +9348,9 @@ void GW_Storage_PurgeOldFiles(uint32_t now_epoch_sec)
  8003c92:	bf00      	nop
  8003c94:	08012200 	.word	0x08012200
  8003c98:	20000de0 	.word	0x20000de0
- 8003c9c:	080123cb 	.word	0x080123cb
+ 8003c9c:	080123b6 	.word	0x080123b6
  8003ca0:	00015180 	.word	0x00015180
- 8003ca4:	080123af 	.word	0x080123af
+ 8003ca4:	0801239a 	.word	0x0801239a
 
 08003ca8 <GW_Storage_GetTotalRecordCount>:
     return false;
@@ -9553,7 +9553,7 @@ bool GW_Storage_ReadRecordByGlobalIndex(uint32_t rec_index_0based,
     for (i = (int32_t)cnt - 1; i >= 0; i--)
  8003dc4:	3d01      	subs	r5, #1
  8003dc6:	e7a5      	b.n	8003d14 <GW_Storage_ReadRecordByGlobalIndex+0x28>
- 8003dc8:	080123af 	.word	0x080123af
+ 8003dc8:	0801239a 	.word	0x0801239a
  8003dcc:	20000de0 	.word	0x20000de0
 
 08003dd0 <prv_cs_high>:
@@ -10265,7 +10265,7 @@ static void prv_led_schedule_next(void)
  80041cc:	20000238 	.word	0x20000238
  80041d0:	20000eb0 	.word	0x20000eb0
  80041d4:	20000eb2 	.word	0x20000eb2
- 80041d8:	08012369 	.word	0x08012369
+ 80041d8:	08012354 	.word	0x08012354
 
 080041dc <prv_lpuart1_release_after_ble_off>:
 {
@@ -10807,7 +10807,7 @@ static const char* prv_skip_spaces(const char* s)
     return s;
 }
  80044f6:	4770      	bx	lr
- 80044f8:	0801370d 	.word	0x0801370d
+ 80044f8:	080136f5 	.word	0x080136f5
 
 080044fc <prv_rstrip>:
 
@@ -10858,7 +10858,7 @@ static void prv_rstrip(char* s)
  8004530:	4801      	ldr	r0, [pc, #4]	@ (8004538 <prv_send_error+0x8>)
  8004532:	f001 b919 	b.w	8005768 <UI_UART_SendString>
  8004536:	bf00      	nop
- 8004538:	080123d5 	.word	0x080123d5
+ 8004538:	080123c0 	.word	0x080123c0
 
 0800453c <prv_parse_u8_dec.constprop.0>:
 
@@ -10910,7 +10910,7 @@ static int prv_parse_u8_dec(const char* s, uint8_t* out)
     return cnt;
 }
  800456e:	bdf0      	pop	{r4, r5, r6, r7, pc}
- 8004570:	0801370d 	.word	0x0801370d
+ 8004570:	080136f5 	.word	0x080136f5
 
 08004574 <prv_commit_config_changed.isra.0>:
 
@@ -11333,26 +11333,26 @@ void UI_Cmd_ProcessLine(const char* line_in)
  8004812:	f7ff fe65 	bl	80044e0 <UI_Hook_OnBleEndRequested>
         return;
  8004816:	e74a      	b.n	80046ae <UI_Cmd_ProcessLine+0x11a>
- 8004818:	080123b0 	.word	0x080123b0
+ 8004818:	0801239b 	.word	0x0801239b
  800481c:	0002bf20 	.word	0x0002bf20
- 8004820:	080123dd 	.word	0x080123dd
- 8004824:	0801370d 	.word	0x0801370d
- 8004828:	080123ea 	.word	0x080123ea
- 800482c:	080123f5 	.word	0x080123f5
- 8004830:	08012401 	.word	0x08012401
- 8004834:	0801240d 	.word	0x0801240d
+ 8004820:	080123c8 	.word	0x080123c8
+ 8004824:	080136f5 	.word	0x080136f5
+ 8004828:	080123d5 	.word	0x080123d5
+ 800482c:	080123e0 	.word	0x080123e0
+ 8004830:	080123ec 	.word	0x080123ec
+ 8004834:	080123f8 	.word	0x080123f8
  8004838:	08012135 	.word	0x08012135
- 800483c:	0801241e 	.word	0x0801241e
- 8004840:	08012429 	.word	0x08012429
+ 800483c:	08012409 	.word	0x08012409
+ 8004840:	08012414 	.word	0x08012414
  8004844:	080120fc 	.word	0x080120fc
- 8004848:	08012435 	.word	0x08012435
- 800484c:	0801243b 	.word	0x0801243b
- 8004850:	08012442 	.word	0x08012442
- 8004854:	0801244d 	.word	0x0801244d
- 8004858:	0801244a 	.word	0x0801244a
- 800485c:	08012455 	.word	0x08012455
- 8004860:	0801245e 	.word	0x0801245e
- 8004864:	08012466 	.word	0x08012466
+ 8004848:	08012420 	.word	0x08012420
+ 800484c:	08012426 	.word	0x08012426
+ 8004850:	0801242d 	.word	0x0801242d
+ 8004854:	08012438 	.word	0x08012438
+ 8004858:	08012435 	.word	0x08012435
+ 800485c:	08012440 	.word	0x08012440
+ 8004860:	08012449 	.word	0x08012449
+ 8004864:	08012451 	.word	0x08012451
 
 08004868 <prv_sanitize_cfg>:
     return 0u;
@@ -11611,7 +11611,7 @@ const UI_Config_t* UI_GetConfig(void)
  80049b6:	bf00      	nop
  80049b8:	20000eb8 	.word	0x20000eb8
  80049bc:	20000ec4 	.word	0x20000ec4
- 80049c0:	0801246f 	.word	0x0801246f
+ 80049c0:	0801245a 	.word	0x0801245a
  80049c4:	20000eba 	.word	0x20000eba
 
 080049c8 <UI_Config_Save>:
@@ -12888,7 +12888,7 @@ static bool prv_prepare_common(uint8_t payload_len)
  8004fe2:	4798      	blx	r3
  8004fe4:	e7f9      	b.n	8004fda <prv_prepare_common+0x2e>
  8004fe6:	bf00      	nop
- 8004fe8:	080135c0 	.word	0x080135c0
+ 8004fe8:	080135a8 	.word	0x080135a8
  8004fec:	2000000c 	.word	0x2000000c
 
 08004ff0 <UI_Radio_PrepareTx>:
@@ -12940,7 +12940,7 @@ bool UI_Radio_PrepareTx(uint8_t payload_len)
  8005034:	47a8      	blx	r5
     return true;
  8005036:	e7e1      	b.n	8004ffc <UI_Radio_PrepareTx+0xc>
- 8005038:	080135c0 	.word	0x080135c0
+ 8005038:	080135a8 	.word	0x080135a8
 
 0800503c <UI_Radio_PrepareRx>:
 
@@ -12991,7 +12991,7 @@ bool UI_Radio_PrepareRx(uint8_t payload_len)
     return true;
  8005080:	e7e3      	b.n	800504a <UI_Radio_PrepareRx+0xe>
  8005082:	bf00      	nop
- 8005084:	080135c0 	.word	0x080135c0
+ 8005084:	080135a8 	.word	0x080135a8
 
 08005088 <UI_Radio_MarkRecoverNeeded>:
 
@@ -13044,7 +13044,7 @@ uint32_t UI_RF_GetDataFreqHz(uint32_t epoch_sec, uint32_t hop_period_sec, uint8_
  80050b4:	4b01      	ldr	r3, [pc, #4]	@ (80050bc <UI_RF_GetDataFreqHz+0x20>)
  80050b6:	f853 0022 	ldr.w	r0, [r3, r2, lsl #2]
  80050ba:	4770      	bx	lr
- 80050bc:	080133a0 	.word	0x080133a0
+ 80050bc:	08013388 	.word	0x08013388
 
 080050c0 <UI_RingBuf_Init>:
 
@@ -13249,7 +13249,7 @@ static bool prv_is_leap(uint16_t y)
  80051b4:	f813 0c01 	ldrbls.w	r0, [r3, #-1]
  80051b8:	e7f5      	b.n	80051a6 <prv_days_in_month+0xe>
  80051ba:	bf00      	nop
- 80051bc:	080133b8 	.word	0x080133b8
+ 80051bc:	080133a0 	.word	0x080133a0
 
 080051c0 <UI_Time_Epoch2016_FromCalendar>:
 
@@ -13855,9 +13855,9 @@ bool UI_Time_SetFromString(const char* time_str)
  80054ea:	d1bc      	bne.n	8005466 <UI_Time_SetFromString+0x7a>
  80054ec:	e7b9      	b.n	8005462 <UI_Time_SetFromString+0x76>
  80054ee:	bf00      	nop
- 80054f0:	08012435 	.word	0x08012435
- 80054f4:	0801247a 	.word	0x0801247a
- 80054f8:	08012496 	.word	0x08012496
+ 80054f0:	08012420 	.word	0x08012420
+ 80054f4:	08012465 	.word	0x08012465
+ 80054f8:	08012481 	.word	0x08012481
 
 080054fc <UI_Time_SaveToBackupNow>:
 
@@ -13972,7 +13972,7 @@ void UI_Time_FormatNow(char* out, size_t out_size)
  800559e:	b008      	add	sp, #32
  80055a0:	bd70      	pop	{r4, r5, r6, pc}
  80055a2:	bf00      	nop
- 80055a4:	080124ae 	.word	0x080124ae
+ 80055a4:	08012499 	.word	0x08012499
 
 080055a8 <prv_uart1_is_inited>:
 {
@@ -14673,10 +14673,10 @@ static int lfs_fs_preporphans(lfs_t *lfs, int8_t orphans) {
  8005936:	2000      	movs	r0, #0
  8005938:	bd08      	pop	{r3, pc}
  800593a:	bf00      	nop
- 800593c:	080124d6 	.word	0x080124d6
- 8005940:	080134b2 	.word	0x080134b2
- 8005944:	0801250c 	.word	0x0801250c
- 8005948:	0801251e 	.word	0x0801251e
+ 800593c:	080124c1 	.word	0x080124c1
+ 8005940:	0801349a 	.word	0x0801349a
+ 8005944:	080124f7 	.word	0x080124f7
+ 8005948:	08012509 	.word	0x08012509
 
 0800594c <lfs_bd_read>:
         void *buffer, lfs_size_t size) {
@@ -14912,10 +14912,10 @@ static inline uint32_t lfs_alignup(uint32_t a, uint32_t alignment) {
  8005ac8:	b007      	add	sp, #28
  8005aca:	e8bd 8ff0 	ldmia.w	sp!, {r4, r5, r6, r7, r8, r9, sl, fp, pc}
  8005ace:	bf00      	nop
- 8005ad0:	08012554 	.word	0x08012554
- 8005ad4:	08013503 	.word	0x08013503
- 8005ad8:	0801250c 	.word	0x0801250c
- 8005adc:	08012582 	.word	0x08012582
+ 8005ad0:	0801253f 	.word	0x0801253f
+ 8005ad4:	080134eb 	.word	0x080134eb
+ 8005ad8:	080124f7 	.word	0x080124f7
+ 8005adc:	0801256d 	.word	0x0801256d
 
 08005ae0 <lfs_dir_getslice>:
         lfs_off_t goff, void *gbuffer, lfs_size_t gsize) {
@@ -15328,10 +15328,10 @@ static int lfs_bd_erase(lfs_t *lfs, lfs_block_t block) {
  8005d98:	e7f2      	b.n	8005d80 <lfs_bd_erase+0x10>
 }
  8005d9a:	bd08      	pop	{r3, pc}
- 8005d9c:	08012b5e 	.word	0x08012b5e
- 8005da0:	080134de 	.word	0x080134de
- 8005da4:	0801250c 	.word	0x0801250c
- 8005da8:	08012582 	.word	0x08012582
+ 8005d9c:	08012b49 	.word	0x08012b49
+ 8005da0:	080134c6 	.word	0x080134c6
+ 8005da4:	080124f7 	.word	0x080124f7
+ 8005da8:	0801256d 	.word	0x0801256d
 
 08005dac <lfs_tortoise_detectcycles>:
     const lfs_mdir_t *dir, struct lfs_tortoise_t *tortoise) {
@@ -15385,8 +15385,8 @@ static int lfs_bd_erase(lfs_t *lfs, lfs_block_t block) {
  8005df8:	2000      	movs	r0, #0
  8005dfa:	e7e9      	b.n	8005dd0 <lfs_tortoise_detectcycles+0x24>
  8005dfc:	080120fe 	.word	0x080120fe
- 8005e00:	0801250c 	.word	0x0801250c
- 8005e04:	0801258b 	.word	0x0801258b
+ 8005e00:	080124f7 	.word	0x080124f7
+ 8005e04:	08012576 	.word	0x08012576
 
 08005e08 <lfs_dir_traverse.constprop.0>:
 static int lfs_dir_traverse(lfs_t *lfs,
@@ -15726,9 +15726,9 @@ static int lfs_dir_traverse(lfs_t *lfs,
  800609e:	e8bd 8ff0 	ldmia.w	sp!, {r4, r5, r6, r7, r8, r9, sl, fp, pc}
  80060a2:	bf00      	nop
  80060a4:	7ff00000 	.word	0x7ff00000
- 80060a8:	080125b6 	.word	0x080125b6
- 80060ac:	08013488 	.word	0x08013488
- 80060b0:	0801250c 	.word	0x0801250c
+ 80060a8:	080125a1 	.word	0x080125a1
+ 80060ac:	08013470 	.word	0x08013470
+ 80060b0:	080124f7 	.word	0x080124f7
  80060b4:	08005861 	.word	0x08005861
  80060b8:	600ffc00 	.word	0x600ffc00
 
@@ -16358,8 +16358,8 @@ static int lfs_bd_crc(lfs_t *lfs,
  8006526:	e6fe      	b.n	8006326 <lfs_dir_fetchmatch+0x14e>
  8006528:	0801202c 	.word	0x0801202c
  800652c:	080120fe 	.word	0x080120fe
- 8006530:	080125bd 	.word	0x080125bd
- 8006534:	0801250c 	.word	0x0801250c
+ 8006530:	080125a8 	.word	0x080125a8
+ 8006534:	080124f7 	.word	0x080124f7
  8006538:	000ffc00 	.word	0x000ffc00
  800653c:	7ffffc00 	.word	0x7ffffc00
         dir->erased = false;
@@ -16776,7 +16776,7 @@ static int lfs_bd_crc(lfs_t *lfs,
  800682e:	e7f5      	b.n	800681c <lfs_dir_find+0x128>
  8006830:	002ffc00 	.word	0x002ffc00
  8006834:	08012200 	.word	0x08012200
- 8006838:	080125f2 	.word	0x080125f2
+ 8006838:	080125dd 	.word	0x080125dd
  800683c:	080068ad 	.word	0x080068ad
  8006840:	20000008 	.word	0x20000008
  8006844:	700ffc00 	.word	0x700ffc00
@@ -17537,8 +17537,8 @@ static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
  8006d4c:	e7ef      	b.n	8006d2e <lfs_alloc+0x7a>
  8006d4e:	bf00      	nop
  8006d50:	080120fe 	.word	0x080120fe
- 8006d54:	080125f5 	.word	0x080125f5
- 8006d58:	0801250c 	.word	0x0801250c
+ 8006d54:	080125e0 	.word	0x080125e0
+ 8006d58:	080124f7 	.word	0x080124f7
 
 08006d5c <lfs_dir_alloc>:
 static int lfs_dir_alloc(lfs_t *lfs, lfs_mdir_t *dir) {
@@ -17938,33 +17938,33 @@ static int lfs_init(lfs_t *lfs, const struct lfs_config *cfg) {
  800703a:	08c9      	lsrs	r1, r1, #3
  800703c:	e7f6      	b.n	800702c <lfs_init+0x220>
  800703e:	bf00      	nop
- 8007040:	0801261e 	.word	0x0801261e
- 8007044:	0801350f 	.word	0x0801350f
- 8007048:	0801250c 	.word	0x0801250c
- 800704c:	0801263c 	.word	0x0801263c
- 8007050:	0801265a 	.word	0x0801265a
- 8007054:	08012679 	.word	0x08012679
- 8007058:	08012697 	.word	0x08012697
- 800705c:	080126b0 	.word	0x080126b0
- 8007060:	080126c9 	.word	0x080126c9
- 8007064:	080126e3 	.word	0x080126e3
- 8007068:	08012713 	.word	0x08012713
- 800706c:	08012743 	.word	0x08012743
- 8007070:	08012774 	.word	0x08012774
- 8007074:	08012790 	.word	0x08012790
- 8007078:	080127ac 	.word	0x080127ac
- 800707c:	08012800 	.word	0x08012800
- 8007080:	0801285f 	.word	0x0801285f
- 8007084:	080128ac 	.word	0x080128ac
- 8007088:	080128f9 	.word	0x080128f9
- 800708c:	08012947 	.word	0x08012947
- 8007090:	08012964 	.word	0x08012964
- 8007094:	0801297e 	.word	0x0801297e
- 8007098:	0801299f 	.word	0x0801299f
- 800709c:	080129ba 	.word	0x080129ba
- 80070a0:	080129e9 	.word	0x080129e9
- 80070a4:	08012a40 	.word	0x08012a40
- 80070a8:	08012a90 	.word	0x08012a90
+ 8007040:	08012609 	.word	0x08012609
+ 8007044:	080134f7 	.word	0x080134f7
+ 8007048:	080124f7 	.word	0x080124f7
+ 800704c:	08012627 	.word	0x08012627
+ 8007050:	08012645 	.word	0x08012645
+ 8007054:	08012664 	.word	0x08012664
+ 8007058:	08012682 	.word	0x08012682
+ 800705c:	0801269b 	.word	0x0801269b
+ 8007060:	080126b4 	.word	0x080126b4
+ 8007064:	080126ce 	.word	0x080126ce
+ 8007068:	080126fe 	.word	0x080126fe
+ 800706c:	0801272e 	.word	0x0801272e
+ 8007070:	0801275f 	.word	0x0801275f
+ 8007074:	0801277b 	.word	0x0801277b
+ 8007078:	08012797 	.word	0x08012797
+ 800707c:	080127eb 	.word	0x080127eb
+ 8007080:	0801284a 	.word	0x0801284a
+ 8007084:	08012897 	.word	0x08012897
+ 8007088:	080128e4 	.word	0x080128e4
+ 800708c:	08012932 	.word	0x08012932
+ 8007090:	0801294f 	.word	0x0801294f
+ 8007094:	08012969 	.word	0x08012969
+ 8007098:	0801298a 	.word	0x0801298a
+ 800709c:	080129a5 	.word	0x080129a5
+ 80070a0:	080129d4 	.word	0x080129d4
+ 80070a4:	08012a2b 	.word	0x08012a2b
+ 80070a8:	08012a7b 	.word	0x08012a7b
     } else if (lfs->inline_max == 0) {
  80070ac:	b9ba      	cbnz	r2, 80070de <lfs_init+0x2d2>
     return (a < b) ? a : b;
@@ -18089,10 +18089,10 @@ static int lfs_init(lfs_t *lfs, const struct lfs_config *cfg) {
                 return LFS_ERR_CORRUPT;
  8007172:	f06f 0053 	mvn.w	r0, #83	@ 0x53
  8007176:	e7c0      	b.n	80070fa <lfs_bd_flush+0x16>
- 8007178:	08012b1f 	.word	0x08012b1f
- 800717c:	080134c5 	.word	0x080134c5
- 8007180:	0801250c 	.word	0x0801250c
- 8007184:	08012582 	.word	0x08012582
+ 8007178:	08012b0a 	.word	0x08012b0a
+ 800717c:	080134ad 	.word	0x080134ad
+ 8007180:	080124f7 	.word	0x080124f7
+ 8007184:	0801256d 	.word	0x0801256d
 
 08007188 <lfs_bd_prog>:
         const void *buffer, lfs_size_t size) {
@@ -18218,11 +18218,11 @@ static int lfs_init(lfs_t *lfs, const struct lfs_config *cfg) {
 }
  8007252:	b003      	add	sp, #12
  8007254:	e8bd 8ff0 	ldmia.w	sp!, {r4, r5, r6, r7, r8, r9, sl, fp, pc}
- 8007258:	08012b40 	.word	0x08012b40
- 800725c:	080134d2 	.word	0x080134d2
- 8007260:	0801250c 	.word	0x0801250c
- 8007264:	08012b77 	.word	0x08012b77
- 8007268:	08012b9a 	.word	0x08012b9a
+ 8007258:	08012b2b 	.word	0x08012b2b
+ 800725c:	080134ba 	.word	0x080134ba
+ 8007260:	080124f7 	.word	0x080124f7
+ 8007264:	08012b62 	.word	0x08012b62
+ 8007268:	08012b85 	.word	0x08012b85
 
 0800726c <lfs_file_relocate>:
 static int lfs_file_relocate(lfs_t *lfs, lfs_file_t *file) {
@@ -18355,8 +18355,8 @@ static int lfs_file_relocate(lfs_t *lfs, lfs_file_t *file) {
  8007362:	bf00      	nop
  8007364:	20100000 	.word	0x20100000
  8007368:	080120fe 	.word	0x080120fe
- 800736c:	0801250c 	.word	0x0801250c
- 8007370:	08012bbd 	.word	0x08012bbd
+ 800736c:	080124f7 	.word	0x080124f7
+ 8007370:	08012ba8 	.word	0x08012ba8
 
 08007374 <lfs_file_flushedwrite>:
         const void *buffer, lfs_size_t size) {
@@ -18699,8 +18699,8 @@ static int lfs_file_relocate(lfs_t *lfs, lfs_file_t *file) {
  80075d4:	e6f9      	b.n	80073ca <lfs_file_flushedwrite+0x56>
  80075d6:	bf00      	nop
  80075d8:	080120fe 	.word	0x080120fe
- 80075dc:	0801250c 	.word	0x0801250c
- 80075e0:	08012bbd 	.word	0x08012bbd
+ 80075dc:	080124f7 	.word	0x080124f7
+ 80075e0:	08012ba8 	.word	0x08012ba8
 
 080075e4 <lfs_dir_commitprog>:
         const void *buffer, lfs_size_t size) {
@@ -18987,8 +18987,8 @@ static int lfs_file_flush(lfs_t *lfs, lfs_file_t *file) {
  80077c6:	e9c4 360c 	strd	r3, r6, [r4, #48]	@ 0x30
  80077ca:	e799      	b.n	8007700 <lfs_file_flush+0x28>
  80077cc:	080120fe 	.word	0x080120fe
- 80077d0:	0801250c 	.word	0x0801250c
- 80077d4:	08012bbd 	.word	0x08012bbd
+ 80077d0:	080124f7 	.word	0x080124f7
+ 80077d4:	08012ba8 	.word	0x08012ba8
 
 080077d8 <lfs_file_write_>:
         const void *buffer, lfs_size_t size) {
@@ -19082,9 +19082,9 @@ static int lfs_file_flush(lfs_t *lfs, lfs_file_t *file) {
  8007870:	f06f 001a 	mvn.w	r0, #26
  8007874:	e7e0      	b.n	8007838 <lfs_file_write_+0x60>
  8007876:	bf00      	nop
- 8007878:	08012be0 	.word	0x08012be0
- 800787c:	080133df 	.word	0x080133df
- 8007880:	0801250c 	.word	0x0801250c
+ 8007878:	08012bcb 	.word	0x08012bcb
+ 800787c:	080133c7 	.word	0x080133c7
+ 8007880:	080124f7 	.word	0x080124f7
 
 08007884 <lfs_bd_sync.constprop.0>:
     rcache->block = LFS_BLOCK_NULL;
@@ -19116,9 +19116,9 @@ static int lfs_bd_sync(lfs_t *lfs,
 }
  80078ac:	bd10      	pop	{r4, pc}
  80078ae:	bf00      	nop
- 80078b0:	08012582 	.word	0x08012582
- 80078b4:	0801347c 	.word	0x0801347c
- 80078b8:	0801250c 	.word	0x0801250c
+ 80078b0:	0801256d 	.word	0x0801256d
+ 80078b4:	08013464 	.word	0x08013464
+ 80078b8:	080124f7 	.word	0x080124f7
 
 080078bc <lfs_dir_commitcrc>:
 static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
@@ -19662,15 +19662,15 @@ static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
  8007cb8:	e700      	b.n	8007abc <lfs_dir_compact+0x28>
  8007cba:	bf00      	nop
  8007cbc:	080120fe 	.word	0x080120fe
- 8007cc0:	0801250c 	.word	0x0801250c
- 8007cc4:	08012bbd 	.word	0x08012bbd
- 8007cc8:	08012c33 	.word	0x08012c33
+ 8007cc0:	080124f7 	.word	0x080124f7
+ 8007cc4:	08012ba8 	.word	0x08012ba8
+ 8007cc8:	08012c1e 	.word	0x08012c1e
  8007ccc:	080076cd 	.word	0x080076cd
  8007cd0:	400ffc00 	.word	0x400ffc00
  8007cd4:	000ffc08 	.word	0x000ffc08
  8007cd8:	7ffffc0c 	.word	0x7ffffc0c
- 8007cdc:	08012c0d 	.word	0x08012c0d
- 8007ce0:	0801346c 	.word	0x0801346c
+ 8007cdc:	08012bf8 	.word	0x08012bf8
+ 8007ce0:	08013454 	.word	0x08013454
 
 08007ce4 <lfs_dir_split>:
         lfs_mdir_t *source, uint16_t split, uint16_t end) {
@@ -20133,16 +20133,16 @@ static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
  800805c:	e69d      	b.n	8007d9a <lfs_dir_relocatingcommit+0x42>
  800805e:	bf00      	nop
  8008060:	080120fe 	.word	0x080120fe
- 8008064:	0801250c 	.word	0x0801250c
- 8008068:	08012c7d 	.word	0x08012c7d
- 800806c:	08012cab 	.word	0x08012cab
- 8008070:	08012cdb 	.word	0x08012cdb
- 8008074:	08012c69 	.word	0x08012c69
- 8008078:	08013499 	.word	0x08013499
- 800807c:	08012c78 	.word	0x08012c78
+ 8008064:	080124f7 	.word	0x080124f7
+ 8008068:	08012c68 	.word	0x08012c68
+ 800806c:	08012c96 	.word	0x08012c96
+ 8008070:	08012cc6 	.word	0x08012cc6
+ 8008074:	08012c54 	.word	0x08012c54
+ 8008078:	08013481 	.word	0x08013481
+ 800807c:	08012c63 	.word	0x08012c63
  8008080:	080076cd 	.word	0x080076cd
  8008084:	7ffffc0c 	.word	0x7ffffc0c
- 8008088:	08012c0d 	.word	0x08012c0d
+ 8008088:	08012bf8 	.word	0x08012bf8
             int err = lfs_dir_traverse(lfs,
  800808c:	ab10      	add	r3, sp, #64	@ 0x40
  800808e:	fa1f f288 	uxth.w	r2, r8
@@ -20725,12 +20725,12 @@ static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
  800851a:	e6f9      	b.n	8008310 <lfs_dir_orphaningcommit+0x138>
  800851c:	000ffc08 	.word	0x000ffc08
  8008520:	080120fe 	.word	0x080120fe
- 8008524:	0801250c 	.word	0x0801250c
- 8008528:	08012d42 	.word	0x08012d42
+ 8008524:	080124f7 	.word	0x080124f7
+ 8008528:	08012d2d 	.word	0x08012d2d
  800852c:	4ff00000 	.word	0x4ff00000
- 8008530:	08012d06 	.word	0x08012d06
- 8008534:	08012d85 	.word	0x08012d85
- 8008538:	080134eb 	.word	0x080134eb
+ 8008530:	08012cf1 	.word	0x08012cf1
+ 8008534:	08012d70 	.word	0x08012d70
+ 8008538:	080134d3 	.word	0x080134d3
     return (tag & 0x000ffc00) >> 10;
  800853c:	6b2c      	ldr	r4, [r5, #48]	@ 0x30
                 LFS_DEBUG("Fixing move while relocating "
@@ -20758,7 +20758,7 @@ static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
             return tag;
  8008568:	4644      	mov	r4, r8
  800856a:	e6d1      	b.n	8008310 <lfs_dir_orphaningcommit+0x138>
- 800856c:	08012d42 	.word	0x08012d42
+ 800856c:	08012d2d 	.word	0x08012d2d
 
 08008570 <lfs_file_seek_>:
         lfs_soff_t off, int whence) {
@@ -21091,13 +21091,13 @@ static int lfs_fs_deorphan(lfs_t *lfs, bool powerloss) {
  80087c0:	e73a      	b.n	8008638 <lfs_fs_deorphan+0x2c>
  80087c2:	bf00      	nop
  80087c4:	7ffffc00 	.word	0x7ffffc00
- 80087c8:	0801250c 	.word	0x0801250c
- 80087cc:	08012dee 	.word	0x08012dee
+ 80087c8:	080124f7 	.word	0x080124f7
+ 80087cc:	08012dd9 	.word	0x08012dd9
  80087d0:	4ff00000 	.word	0x4ff00000
  80087d4:	080120fe 	.word	0x080120fe
- 80087d8:	08012e35 	.word	0x08012e35
+ 80087d8:	08012e20 	.word	0x08012e20
  80087dc:	000ffc08 	.word	0x000ffc08
- 80087e0:	08012daa 	.word	0x08012daa
+ 80087e0:	08012d95 	.word	0x08012d95
  80087e4:	600ffc08 	.word	0x600ffc08
 
 080087e8 <lfs_dir_commit>:
@@ -21422,13 +21422,13 @@ static int lfs_fs_forceconsistency(lfs_t *lfs) {
  8008a14:	b015      	add	sp, #84	@ 0x54
  8008a16:	bd30      	pop	{r4, r5, pc}
  8008a18:	080120fe 	.word	0x080120fe
- 8008a1c:	0801250c 	.word	0x0801250c
- 8008a20:	08012e62 	.word	0x08012e62
+ 8008a1c:	080124f7 	.word	0x080124f7
+ 8008a20:	08012e4d 	.word	0x08012e4d
  8008a24:	00020001 	.word	0x00020001
  8008a28:	20100018 	.word	0x20100018
- 8008a2c:	08012e96 	.word	0x08012e96
- 8008a30:	08012ec7 	.word	0x08012ec7
- 8008a34:	08013452 	.word	0x08013452
+ 8008a2c:	08012e81 	.word	0x08012e81
+ 8008a30:	08012eb2 	.word	0x08012eb2
+ 8008a34:	0801343a 	.word	0x0801343a
  8008a38:	4ff00000 	.word	0x4ff00000
 
 08008a3c <lfs_file_opencfg_>:
@@ -21867,13 +21867,13 @@ int lfs_format(lfs_t *lfs, const struct lfs_config *cfg) {
  8008d42:	b016      	add	sp, #88	@ 0x58
  8008d44:	bd70      	pop	{r4, r5, r6, pc}
  8008d46:	bf00      	nop
- 8008d48:	08012ef8 	.word	0x08012ef8
- 8008d4c:	08013518 	.word	0x08013518
- 8008d50:	0801250c 	.word	0x0801250c
+ 8008d48:	08012ee3 	.word	0x08012ee3
+ 8008d4c:	08013500 	.word	0x08013500
+ 8008d50:	080124f7 	.word	0x080124f7
  8008d54:	00020001 	.word	0x00020001
  8008d58:	40100000 	.word	0x40100000
  8008d5c:	0ff00008 	.word	0x0ff00008
- 8008d60:	08012f0e 	.word	0x08012f0e
+ 8008d60:	08012ef9 	.word	0x08012ef9
  8008d64:	20100018 	.word	0x20100018
 
 08008d68 <lfs_unmount>:
@@ -22166,21 +22166,21 @@ int lfs_mount(lfs_t *lfs, const struct lfs_config *cfg) {
  8008f6a:	f43f af1c 	beq.w	8008da6 <lfs_mount+0x3a>
  8008f6e:	e78c      	b.n	8008e8a <lfs_mount+0x11e>
  8008f70:	08012034 	.word	0x08012034
- 8008f74:	08012f0e 	.word	0x08012f0e
+ 8008f74:	08012ef9 	.word	0x08012ef9
  8008f78:	080068ad 	.word	0x080068ad
  8008f7c:	20100018 	.word	0x20100018
  8008f80:	080120fe 	.word	0x080120fe
- 8008f84:	0801250c 	.word	0x0801250c
- 8008f88:	0801307e 	.word	0x0801307e
+ 8008f84:	080124f7 	.word	0x080124f7
+ 8008f88:	08013069 	.word	0x08013069
  8008f8c:	0ff00008 	.word	0x0ff00008
  8008f90:	7ffffc00 	.word	0x7ffffc00
- 8008f94:	08012f17 	.word	0x08012f17
- 8008f98:	08012f4c 	.word	0x08012f4c
- 8008f9c:	08012f8a 	.word	0x08012f8a
- 8008fa0:	08012fbb 	.word	0x08012fbb
- 8008fa4:	08012fec 	.word	0x08012fec
- 8008fa8:	0801301d 	.word	0x0801301d
- 8008fac:	0801304e 	.word	0x0801304e
+ 8008f94:	08012f02 	.word	0x08012f02
+ 8008f98:	08012f37 	.word	0x08012f37
+ 8008f9c:	08012f75 	.word	0x08012f75
+ 8008fa0:	08012fa6 	.word	0x08012fa6
+ 8008fa4:	08012fd7 	.word	0x08012fd7
+ 8008fa8:	08013008 	.word	0x08013008
+ 8008fac:	08013039 	.word	0x08013039
 
 08008fb0 <lfs_remove>:
     LFS_UNLOCK(lfs->cfg);
@@ -22329,9 +22329,9 @@ int lfs_remove(lfs_t *lfs, const char *path) {
  800909c:	e7e6      	b.n	800906c <lfs_remove+0xbc>
  800909e:	bf00      	nop
  80090a0:	700ffc00 	.word	0x700ffc00
- 80090a4:	080130b5 	.word	0x080130b5
- 80090a8:	08013460 	.word	0x08013460
- 80090ac:	0801250c 	.word	0x0801250c
+ 80090a4:	080130a0 	.word	0x080130a0
+ 80090a8:	08013448 	.word	0x08013448
+ 80090ac:	080124f7 	.word	0x080124f7
 
 080090b0 <lfs_file_open>:
     return err;
@@ -22369,10 +22369,10 @@ int lfs_file_open(lfs_t *lfs, lfs_file_t *file, const char *path, int flags) {
 }
  80090d4:	b002      	add	sp, #8
  80090d6:	bd10      	pop	{r4, pc}
- 80090d8:	080130d8 	.word	0x080130d8
- 80090dc:	08013444 	.word	0x08013444
- 80090e0:	0801250c 	.word	0x0801250c
- 80090e4:	08013438 	.word	0x08013438
+ 80090d8:	080130c3 	.word	0x080130c3
+ 80090dc:	0801342c 	.word	0x0801342c
+ 80090e0:	080124f7 	.word	0x080124f7
+ 80090e4:	08013420 	.word	0x08013420
 
 080090e8 <lfs_file_close>:
     LFS_TRACE("lfs_file_opencfg -> %d", err);
@@ -22408,9 +22408,9 @@ int lfs_file_close(lfs_t *lfs, lfs_file_t *file) {
  8009104:	e8bd 4008 	ldmia.w	sp!, {r3, lr}
     err = lfs_file_close_(lfs, file);
  8009108:	f7ff bbee 	b.w	80088e8 <lfs_file_close_>
- 800910c:	080130d9 	.word	0x080130d9
- 8009110:	08013429 	.word	0x08013429
- 8009114:	0801250c 	.word	0x0801250c
+ 800910c:	080130c4 	.word	0x080130c4
+ 8009110:	08013411 	.word	0x08013411
+ 8009114:	080124f7 	.word	0x080124f7
 
 08009118 <lfs_file_sync>:
 
@@ -22443,9 +22443,9 @@ int lfs_file_sync(lfs_t *lfs, lfs_file_t *file) {
  8009134:	e8bd 4008 	ldmia.w	sp!, {r3, lr}
     err = lfs_file_sync_(lfs, file);
  8009138:	f7ff bb82 	b.w	8008840 <lfs_file_sync_>
- 800913c:	080130d9 	.word	0x080130d9
- 8009140:	0801341b 	.word	0x0801341b
- 8009144:	0801250c 	.word	0x0801250c
+ 800913c:	080130c4 	.word	0x080130c4
+ 8009140:	08013403 	.word	0x08013403
+ 8009144:	080124f7 	.word	0x080124f7
 
 08009148 <lfs_file_read>:
 #endif
@@ -22506,11 +22506,11 @@ lfs_ssize_t lfs_file_read(lfs_t *lfs, lfs_file_t *file,
  8009196:	d0f2      	beq.n	800917e <lfs_file_read+0x36>
 }
  8009198:	e8bd 81f0 	ldmia.w	sp!, {r4, r5, r6, r7, r8, pc}
- 800919c:	080130d9 	.word	0x080130d9
- 80091a0:	0801340d 	.word	0x0801340d
- 80091a4:	0801250c 	.word	0x0801250c
- 80091a8:	0801310f 	.word	0x0801310f
- 80091ac:	080133fe 	.word	0x080133fe
+ 800919c:	080130c4 	.word	0x080130c4
+ 80091a0:	080133f5 	.word	0x080133f5
+ 80091a4:	080124f7 	.word	0x080124f7
+ 80091a8:	080130fa 	.word	0x080130fa
+ 80091ac:	080133e6 	.word	0x080133e6
 
 080091b0 <lfs_file_write>:
 
@@ -22544,9 +22544,9 @@ lfs_ssize_t lfs_file_write(lfs_t *lfs, lfs_file_t *file,
  80091cc:	e8bd 4010 	ldmia.w	sp!, {r4, lr}
     lfs_ssize_t res = lfs_file_write_(lfs, file, buffer, size);
  80091d0:	f7fe bb02 	b.w	80077d8 <lfs_file_write_>
- 80091d4:	080130d9 	.word	0x080130d9
- 80091d8:	080133ef 	.word	0x080133ef
- 80091dc:	0801250c 	.word	0x0801250c
+ 80091d4:	080130c4 	.word	0x080130c4
+ 80091d8:	080133d7 	.word	0x080133d7
+ 80091dc:	080124f7 	.word	0x080124f7
 
 080091e0 <lfs_file_seek>:
 #endif
@@ -22580,9 +22580,9 @@ lfs_soff_t lfs_file_seek(lfs_t *lfs, lfs_file_t *file,
  80091fc:	e8bd 4010 	ldmia.w	sp!, {r4, lr}
     lfs_soff_t res = lfs_file_seek_(lfs, file, off, whence);
  8009200:	f7ff b9b6 	b.w	8008570 <lfs_file_seek_>
- 8009204:	080130d9 	.word	0x080130d9
- 8009208:	080133d1 	.word	0x080133d1
- 800920c:	0801250c 	.word	0x0801250c
+ 8009204:	080130c4 	.word	0x080130c4
+ 8009208:	080133b9 	.word	0x080133b9
+ 800920c:	080124f7 	.word	0x080124f7
 
 08009210 <lfs_dir_open>:
     LFS_UNLOCK(lfs->cfg);
@@ -22691,9 +22691,9 @@ int lfs_dir_open(lfs_t *lfs, lfs_dir_t *dir, const char *path) {
  800929e:	f06f 0013 	mvn.w	r0, #19
     return err;
  80092a2:	e7fa      	b.n	800929a <lfs_dir_open+0x8a>
- 80092a4:	0801313c 	.word	0x0801313c
- 80092a8:	080133c4 	.word	0x080133c4
- 80092ac:	0801250c 	.word	0x0801250c
+ 80092a4:	08013127 	.word	0x08013127
+ 80092a8:	080133ac 	.word	0x080133ac
+ 80092ac:	080124f7 	.word	0x080124f7
  80092b0:	20000008 	.word	0x20000008
  80092b4:	700ffc00 	.word	0x700ffc00
 
@@ -22811,8 +22811,8 @@ int lfs_dir_read(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
  800935a:	4902      	ldr	r1, [pc, #8]	@ (8009364 <lfs_dir_read+0x90>)
  800935c:	e7cc      	b.n	80092f8 <lfs_dir_read+0x24>
  800935e:	bf00      	nop
- 8009360:	080125f3 	.word	0x080125f3
- 8009364:	080125f2 	.word	0x080125f2
+ 8009360:	080125de 	.word	0x080125de
+ 8009364:	080125dd 	.word	0x080125dd
 
 08009368 <lfs_crc>:
 
@@ -22853,7 +22853,7 @@ uint32_t lfs_crc(uint32_t crc, const void *buffer, size_t size) {
     for (size_t i = 0; i < size; i++) {
  8009398:	e7e9      	b.n	800936e <lfs_crc+0x6>
  800939a:	bf00      	nop
- 800939c:	08013524 	.word	0x08013524
+ 800939c:	0801350c 	.word	0x0801350c
 
 080093a0 <HAL_InitTick>:
   *       implementation  in user file.
@@ -26354,8 +26354,8 @@ static HAL_StatusTypeDef RCC_SetFlashLatencyFromMSIRange(uint32_t MSI_Range)
  800a72e:	2003      	movs	r0, #3
  800a730:	e7f2      	b.n	800a718 <RCC_SetFlashLatencyFromMSIRange+0x9c>
  800a732:	bf00      	nop
- 800a734:	08013250 	.word	0x08013250
- 800a738:	080132b0 	.word	0x080132b0
+ 800a734:	08013238 	.word	0x08013238
+ 800a738:	08013298 	.word	0x08013298
  800a73c:	08012044 	.word	0x08012044
  800a740:	006acfc0 	.word	0x006acfc0
  800a744:	0121eabf 	.word	0x0121eabf
@@ -26486,7 +26486,7 @@ __STATIC_INLINE uint32_t LL_RCC_PLL_GetMainSource(void)
  800a81a:	4b03      	ldr	r3, [pc, #12]	@ (800a828 <HAL_RCC_GetSysClockFreq+0xd8>)
  800a81c:	e7d7      	b.n	800a7ce <HAL_RCC_GetSysClockFreq+0x7e>
  800a81e:	bf00      	nop
- 800a820:	08013250 	.word	0x08013250
+ 800a820:	08013238 	.word	0x08013238
  800a824:	01e84800 	.word	0x01e84800
  800a828:	00f42400 	.word	0x00f42400
 
@@ -26504,7 +26504,7 @@ __STATIC_INLINE uint32_t LL_RCC_PLL_GetMainSource(void)
 }
  800a842:	fbb0 f0f3 	udiv	r0, r0, r3
  800a846:	bd08      	pop	{r3, pc}
- 800a848:	080132b0 	.word	0x080132b0
+ 800a848:	08013298 	.word	0x08013298
 
 0800a84c <HAL_RCC_OscConfig>:
 {
@@ -27417,7 +27417,7 @@ __STATIC_INLINE uint32_t LL_RCC_IsActiveFlag_PPRE2(void)
  800af56:	40d8      	lsrs	r0, r3
  800af58:	bd08      	pop	{r3, pc}
  800af5a:	bf00      	nop
- 800af5c:	08013290 	.word	0x08013290
+ 800af5c:	08013278 	.word	0x08013278
 
 0800af60 <HAL_RCC_GetPCLK2Freq>:
 {
@@ -27434,7 +27434,7 @@ __STATIC_INLINE uint32_t LL_RCC_IsActiveFlag_PPRE2(void)
  800af76:	40d8      	lsrs	r0, r3
  800af78:	bd08      	pop	{r3, pc}
  800af7a:	bf00      	nop
- 800af7c:	08013290 	.word	0x08013290
+ 800af7c:	08013278 	.word	0x08013278
 
 0800af80 <LL_RCC_LSE_IsReady>:
   return ((READ_BIT(RCC->BDCR, RCC_BDCR_LSERDY) == (RCC_BDCR_LSERDY)) ? 1UL : 0UL);
@@ -33351,7 +33351,7 @@ static void UART_EndTransmit_IT(UART_HandleTypeDef *huart)
  800d248:	000c0008 	.word	0x000c0008
  800d24c:	000c0004 	.word	0x000c0004
  800d250:	00f42400 	.word	0x00f42400
- 800d254:	08013564 	.word	0x08013564
+ 800d254:	0801354c 	.word	0x0801354c
  800d258:	000ffcff 	.word	0x000ffcff
 
 0800d25c <UART_AdvFeatureConfig>:
@@ -34047,8 +34047,8 @@ static void UART_EndTransmit_IT(UART_HandleTypeDef *huart)
  800d6ee:	fbb3 f3f2 	udiv	r3, r3, r2
 }
  800d6f2:	e7e7      	b.n	800d6c4 <UARTEx_SetNbDataToProcess+0xc>
- 800d6f4:	08013584 	.word	0x08013584
- 800d6f8:	0801357c 	.word	0x0801357c
+ 800d6f4:	0801356c 	.word	0x0801356c
+ 800d6f8:	08013564 	.word	0x08013564
 
 0800d6fc <HAL_UARTEx_WakeupCallback>:
 }
@@ -34488,7 +34488,7 @@ static void RadioOnRxTimeoutProcess( void )
 }
  800d980:	bd08      	pop	{r3, pc}
  800d982:	bf00      	nop
- 800d984:	0801358c 	.word	0x0801358c
+ 800d984:	08013574 	.word	0x08013574
 
 0800d988 <RadioGetWakeupTime>:
 {
@@ -35694,7 +35694,7 @@ static void RadioOnRxTimeoutProcess( void )
  800e1c2:	e79d      	b.n	800e100 <RadioSetTxConfig+0xac>
  800e1c4:	2000119c 	.word	0x2000119c
  800e1c8:	08012050 	.word	0x08012050
- 800e1cc:	080135bc 	.word	0x080135bc
+ 800e1cc:	080135a4 	.word	0x080135a4
  800e1d0:	20000014 	.word	0x20000014
  800e1d4:	200011d4 	.word	0x200011d4
  800e1d8:	200011aa 	.word	0x200011aa
@@ -36037,7 +36037,7 @@ static void RadioOnRxTimeoutProcess( void )
  800e498:	2000119c 	.word	0x2000119c
  800e49c:	20000014 	.word	0x20000014
  800e4a0:	08012050 	.word	0x08012050
- 800e4a4:	080135bc 	.word	0x080135bc
+ 800e4a4:	080135a4 	.word	0x080135a4
  800e4a8:	200011d4 	.word	0x200011d4
  800e4ac:	200011aa 	.word	0x200011aa
 
@@ -36463,8 +36463,8 @@ static void RadioOnRxTimeoutProcess( void )
  800e7b0:	e79c      	b.n	800e6ec <RadioTimeOnAir+0x1c>
     return DIVC( numerator, denominator );
  800e7b2:	deff      	udf	#255	@ 0xff
- 800e7b4:	080135bc 	.word	0x080135bc
- 800e7b8:	08013590 	.word	0x08013590
+ 800e7b4:	080135a4 	.word	0x080135a4
+ 800e7b8:	08013578 	.word	0x08013578
 
 0800e7bc <RadioTxPrbs>:
 {
@@ -38486,7 +38486,7 @@ uint8_t SUBGRF_GetFskBandwidthRegValue( uint32_t bandwidth )
         return( 0x1F );
  800f510:	201f      	movs	r0, #31
  800f512:	e7f8      	b.n	800f506 <SUBGRF_GetFskBandwidthRegValue+0x16>
- 800f514:	0801364c 	.word	0x0801364c
+ 800f514:	08013634 	.word	0x08013634
 
 0800f518 <SUBGRF_GetCFO>:
 void SUBGRF_GetCFO( uint32_t bitRate, int32_t *cfo)
@@ -38789,7 +38789,7 @@ static void OnRxError(void)
  800f628:	0800f5f7 	.word	0x0800f5f7
  800f62c:	0800f5f3 	.word	0x0800f5f3
  800f630:	0800f5ef 	.word	0x0800f5ef
- 800f634:	080135c0 	.word	0x080135c0
+ 800f634:	080135a8 	.word	0x080135a8
  800f638:	0800f5eb 	.word	0x0800f5eb
  800f63c:	0800f5e7 	.word	0x0800f5e7
 
@@ -39188,7 +39188,7 @@ SysTime_t SysTimeGet( void )
  800f7aa:	b002      	add	sp, #8
  800f7ac:	bd70      	pop	{r4, r5, r6, pc}
  800f7ae:	bf00      	nop
- 800f7b0:	080132f0 	.word	0x080132f0
+ 800f7b0:	080132d8 	.word	0x080132d8
 
 0800f7b4 <tiny_vsnprintf_like>:
 
@@ -39516,9 +39516,9 @@ int tiny_vsnprintf_like(char *buf, const int size, const char *fmt, va_list args
     return 0;
  800f9ec:	2000      	movs	r0, #0
  800f9ee:	e6f0      	b.n	800f7d2 <tiny_vsnprintf_like+0x1e>
- 800f9f0:	08013172 	.word	0x08013172
- 800f9f4:	08013179 	.word	0x08013179
- 800f9f8:	0801319e 	.word	0x0801319e
+ 800f9f0:	0801315d 	.word	0x0801315d
+ 800f9f4:	08013164 	.word	0x08013164
+ 800f9f8:	08013189 	.word	0x08013189
 
 0800f9fc <UTIL_SEQ_SetTask>:
 
@@ -39618,7 +39618,7 @@ uint8_t n = 0U;
  800fa62:	b2c0      	uxtb	r0, r0
  800fa64:	4770      	bx	lr
  800fa66:	bf00      	nop
- 800fa68:	080136fc 	.word	0x080136fc
+ 800fa68:	080136e4 	.word	0x080136e4
 
 0800fa6c <UTIL_SEQ_Run>:
 {
@@ -39791,7 +39791,7 @@ UTIL_TIMER_Status_t UTIL_TIMER_Init(void)
  800fb9c:	681b      	ldr	r3, [r3, #0]
  800fb9e:	4718      	bx	r3
  800fba0:	20001350 	.word	0x20001350
- 800fba4:	08013304 	.word	0x08013304
+ 800fba4:	080132ec 	.word	0x080132ec
 
 0800fba8 <UTIL_TIMER_Create>:
 {
@@ -39852,7 +39852,7 @@ UTIL_TIMER_Status_t UTIL_TIMER_Create( UTIL_TIMER_Object_t *TimerObject, uint32_
     return UTIL_TIMER_INVALID_PARAM;
  800fbd4:	2001      	movs	r0, #1
  800fbd6:	e7fc      	b.n	800fbd2 <UTIL_TIMER_Create+0x2a>
- 800fbd8:	08013304 	.word	0x08013304
+ 800fbd8:	080132ec 	.word	0x080132ec
 
 0800fbdc <UTIL_TIMER_GetCurrentTime>:
   }
@@ -39872,7 +39872,7 @@ UTIL_TIMER_Time_t UTIL_TIMER_GetCurrentTime(void)
  800fbe6:	e8bd 4010 	ldmia.w	sp!, {r4, lr}
   return  UTIL_TimerDriver.Tick2ms(now);
  800fbea:	4718      	bx	r3
- 800fbec:	08013304 	.word	0x08013304
+ 800fbec:	080132ec 	.word	0x080132ec
 
 0800fbf0 <UTIL_TIMER_GetElapsedTime>:
 
@@ -39901,7 +39901,7 @@ UTIL_TIMER_Time_t UTIL_TIMER_GetElapsedTime(UTIL_TIMER_Time_t past )
  800fc06:	e8bd 4070 	ldmia.w	sp!, {r4, r5, r6, lr}
   return UTIL_TimerDriver.Tick2ms( nowInTicks- pastInTicks );
  800fc0a:	4718      	bx	r3
- 800fc0c:	08013304 	.word	0x08013304
+ 800fc0c:	080132ec 	.word	0x080132ec
 
 0800fc10 <TimerExists>:
  * @param TimerObject Structure containing the timer object parameters
@@ -39983,7 +39983,7 @@ void TimerSetTimeout( UTIL_TIMER_Object_t *TimerObject )
  800fc5a:	e8bd 41f0 	ldmia.w	sp!, {r4, r5, r6, r7, r8, lr}
   UTIL_TimerDriver.StartTimerEvt( TimerObject->Timestamp );
  800fc5e:	4718      	bx	r3
- 800fc60:	08013304 	.word	0x08013304
+ 800fc60:	080132ec 	.word	0x080132ec
 
 0800fc64 <UTIL_TIMER_Stop>:
 {
@@ -40053,7 +40053,7 @@ void TimerSetTimeout( UTIL_TIMER_Object_t *TimerObject )
  800fcb4:	e7ee      	b.n	800fc94 <UTIL_TIMER_Stop+0x30>
  800fcb6:	bf00      	nop
  800fcb8:	20001350 	.word	0x20001350
- 800fcbc:	08013304 	.word	0x08013304
+ 800fcbc:	080132ec 	.word	0x080132ec
 
 0800fcc0 <TimerInsertTimer>:
  *
@@ -40203,7 +40203,7 @@ void TimerInsertNewHeadTimer( UTIL_TIMER_Object_t *TimerObject )
  800fd66:	2501      	movs	r5, #1
  800fd68:	e7ed      	b.n	800fd46 <UTIL_TIMER_Start+0x46>
  800fd6a:	bf00      	nop
- 800fd6c:	08013304 	.word	0x08013304
+ 800fd6c:	080132ec 	.word	0x080132ec
  800fd70:	20001350 	.word	0x20001350
 
 0800fd74 <UTIL_TIMER_SetPeriod>:
@@ -40235,7 +40235,7 @@ void TimerInsertNewHeadTimer( UTIL_TIMER_Object_t *TimerObject )
  800fd9c:	2001      	movs	r0, #1
 }
  800fd9e:	bd10      	pop	{r4, pc}
- 800fda0:	08013304 	.word	0x08013304
+ 800fda0:	080132ec 	.word	0x080132ec
 
 0800fda4 <UTIL_TIMER_IRQ_Handler>:
 {
@@ -40323,7 +40323,7 @@ void TimerInsertNewHeadTimer( UTIL_TIMER_Object_t *TimerObject )
     TimerSetTimeout( TimerListHead );
  800fe1e:	f7ff ff05 	bl	800fc2c <TimerSetTimeout>
  800fe22:	e7d3      	b.n	800fdcc <UTIL_TIMER_IRQ_Handler+0x28>
- 800fe24:	08013304 	.word	0x08013304
+ 800fe24:	080132ec 	.word	0x080132ec
  800fe28:	20001350 	.word	0x20001350
 
 0800fe2c <TRACE_UnLock>:
@@ -40371,7 +40371,7 @@ static void TRACE_UnLock(void)
  800fe66:	4718      	bx	r3
  800fe68:	20001554 	.word	0x20001554
  800fe6c:	20001354 	.word	0x20001354
- 800fe70:	08013330 	.word	0x08013330
+ 800fe70:	08013318 	.word	0x08013318
  800fe74:	0800fe91 	.word	0x0800fe91
 
 0800fe78 <UTIL_ADV_TRACE_RegisterTimeStampFunction>:
@@ -40494,7 +40494,7 @@ static void TRACE_UnLock(void)
  800ff18:	f7ff bf88 	b.w	800fe2c <TRACE_UnLock>
  800ff1c:	20001554 	.word	0x20001554
  800ff20:	20001354 	.word	0x20001354
- 800ff24:	08013330 	.word	0x08013330
+ 800ff24:	08013318 	.word	0x08013318
 
 0800ff28 <__assert_func>:
  800ff28:	b51f      	push	{r0, r1, r2, r3, r4, lr}
@@ -40517,8 +40517,8 @@ static void TRACE_UnLock(void)
  800ff50:	e7f3      	b.n	800ff3a <__assert_func+0x12>
  800ff52:	bf00      	nop
  800ff54:	2000002c 	.word	0x2000002c
- 800ff58:	080131c3 	.word	0x080131c3
- 800ff5c:	080131d0 	.word	0x080131d0
+ 800ff58:	080131ae 	.word	0x080131ae
+ 800ff5c:	080131bb 	.word	0x080131bb
  800ff60:	080120fe 	.word	0x080120fe
 
 0800ff64 <malloc>:
@@ -41669,10 +41669,10 @@ static void TRACE_UnLock(void)
  8010972:	4798      	blx	r3
  8010974:	3601      	adds	r6, #1
  8010976:	e7f2      	b.n	801095e <__libc_init_array+0x1e>
- 8010978:	08013818 	.word	0x08013818
- 801097c:	08013818 	.word	0x08013818
- 8010980:	08013818 	.word	0x08013818
- 8010984:	0801381c 	.word	0x0801381c
+ 8010978:	08013800 	.word	0x08013800
+ 801097c:	08013800 	.word	0x08013800
+ 8010980:	08013800 	.word	0x08013800
+ 8010984:	08013804 	.word	0x08013804
 
 08010988 <__retarget_lock_init_recursive>:
  8010988:	4770      	bx	lr
@@ -42057,9 +42057,9 @@ static void TRACE_UnLock(void)
  8010cf0:	4638      	mov	r0, r7
  8010cf2:	f000 fb89 	bl	8011408 <_printf_i>
  8010cf6:	e7ed      	b.n	8010cd4 <_svfiprintf_r+0x1c0>
- 8010cf8:	080131ff 	.word	0x080131ff
- 8010cfc:	08013205 	.word	0x08013205
- 8010d00:	08013209 	.word	0x08013209
+ 8010cf8:	080131ea 	.word	0x080131ea
+ 8010cfc:	080131f0 	.word	0x080131f0
+ 8010d00:	080131f4 	.word	0x080131f4
  8010d04:	00000000 	.word	0x00000000
  8010d08:	08010a5d 	.word	0x08010a5d
 
@@ -42423,8 +42423,8 @@ static void TRACE_UnLock(void)
  801106a:	bf00      	nop
  801106c:	08010d0d 	.word	0x08010d0d
  8011070:	08010d87 	.word	0x08010d87
- 8011074:	0801370d 	.word	0x0801370d
- 8011078:	08013205 	.word	0x08013205
+ 8011074:	080136f5 	.word	0x080136f5
+ 8011078:	080131f0 	.word	0x080131f0
  801107c:	4b0a      	ldr	r3, [pc, #40]	@ (80110a8 <__ssvfiscanf_r+0x2e8>)
  801107e:	2b00      	cmp	r3, #0
  8011080:	f43f aec6 	beq.w	8010e10 <__ssvfiscanf_r+0x50>
@@ -42708,9 +42708,9 @@ static void TRACE_UnLock(void)
  8011310:	4630      	mov	r0, r6
  8011312:	f000 f879 	bl	8011408 <_printf_i>
  8011316:	e7e4      	b.n	80112e2 <_vfiprintf_r+0x1e6>
- 8011318:	080131ff 	.word	0x080131ff
- 801131c:	08013205 	.word	0x08013205
- 8011320:	08013209 	.word	0x08013209
+ 8011318:	080131ea 	.word	0x080131ea
+ 801131c:	080131f0 	.word	0x080131f0
+ 8011320:	080131f4 	.word	0x080131f4
  8011324:	00000000 	.word	0x00000000
  8011328:	080110d7 	.word	0x080110d7
 
@@ -43041,8 +43041,8 @@ static void TRACE_UnLock(void)
  8011634:	2500      	movs	r5, #0
  8011636:	f104 0619 	add.w	r6, r4, #25
  801163a:	e7f5      	b.n	8011628 <_printf_i+0x220>
- 801163c:	08013210 	.word	0x08013210
- 8011640:	08013221 	.word	0x08013221
+ 801163c:	080131fb 	.word	0x080131fb
+ 8011640:	0801320c 	.word	0x0801320c
 
 08011644 <_scanf_chars>:
  8011644:	e92d 43f8 	stmdb	sp!, {r3, r4, r5, r6, r7, r8, r9, lr}
@@ -43125,7 +43125,7 @@ static void TRACE_UnLock(void)
  80116ec:	2000      	movs	r0, #0
  80116ee:	e8bd 83f8 	ldmia.w	sp!, {r3, r4, r5, r6, r7, r8, r9, pc}
  80116f2:	bf00      	nop
- 80116f4:	0801370d 	.word	0x0801370d
+ 80116f4:	080136f5 	.word	0x080136f5
 
 080116f8 <_scanf_i>:
  80116f8:	e92d 4ff0 	stmdb	sp!, {r4, r5, r6, r7, r8, r9, sl, fp, lr}
@@ -43322,7 +43322,7 @@ static void TRACE_UnLock(void)
  80118d0:	08012060 	.word	0x08012060
  80118d4:	08011e19 	.word	0x08011e19
  80118d8:	08011ef9 	.word	0x08011ef9
- 80118dc:	08013242 	.word	0x08013242
+ 80118dc:	0801322d 	.word	0x0801322d
 
 080118e0 <__sflush_r>:
  80118e0:	f9b1 200c 	ldrsh.w	r2, [r1, #12]
@@ -43913,7 +43913,7 @@ static void TRACE_UnLock(void)
  8011e0c:	d1f6      	bne.n	8011dfc <_strtol_l.isra.0+0xd8>
  8011e0e:	f8c8 1000 	str.w	r1, [r8]
  8011e12:	e794      	b.n	8011d3e <_strtol_l.isra.0+0x1a>
- 8011e14:	0801370d 	.word	0x0801370d
+ 8011e14:	080136f5 	.word	0x080136f5
 
 08011e18 <_strtol_r>:
  8011e18:	f7ff bf84 	b.w	8011d24 <_strtol_l.isra.0>
@@ -44006,7 +44006,7 @@ static void TRACE_UnLock(void)
  8011eee:	1e69      	subs	r1, r5, #1
  8011ef0:	6011      	str	r1, [r2, #0]
  8011ef2:	e7f5      	b.n	8011ee0 <_strtoul_l.isra.0+0xc4>
- 8011ef4:	0801370d 	.word	0x0801370d
+ 8011ef4:	080136f5 	.word	0x080136f5
 
 08011ef8 <_strtoul_r>:
  8011ef8:	f7ff bf90 	b.w	8011e1c <_strtoul_l.isra.0>
