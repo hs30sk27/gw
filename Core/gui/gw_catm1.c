@@ -1349,7 +1349,7 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
         node_volt_flag = prv_node_voltage_flag(r->batt_lvl);
         node_temp_c = (int)r->temp_c;
         prv_append_fmt(out, out_sz, &len,
-                       "N:%02lu,V:%c,T:%d,X:%d,Y:%d,Z:%d,A:%u,P:%lu\r\n",
+                       "NODE:%02lu,V:%c,T:%d,X:%d,Y:%d,Z:%d,ADC_VALUE:%u,PULSE_COUNT:%lu\r\n",
                        (unsigned long)i,
                        node_volt_flag,
                        node_temp_c,
@@ -1391,12 +1391,12 @@ void GW_Catm1_UartErrorCallback(UART_HandleTypeDef *huart)
 void GW_Catm1_Init(void)
 {
     prv_catm1_rb_reset();
+    prv_power_leds_blink_twice();
 }
 
 void GW_Catm1_PowerOn(void)
 {
     s_catm1_session_at_ok = false;
-    prv_power_leds_blink_twice();
 #if defined(PWR_KEY_Pin)
     HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
 #endif
@@ -1416,7 +1416,6 @@ void GW_Catm1_PowerOff(void)
     char rsp[UI_CATM1_RX_BUF_SZ];
     bool normal_pd = false;
 
-    prv_power_leds_blink_twice();
 #if defined(PWR_KEY_Pin)
     HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
 #endif
