@@ -1,0 +1,13 @@
+../Core/gui/ui_uart.c:34:13:prv_uart1_is_inited	0	static
+../Core/gui/ui_uart.c:27:13:prv_rx_idle_cb	0	static
+../Core/gui/ui_uart.c:43:6:UI_UART_Init	16	static
+../Core/gui/ui_uart.c:56:6:UI_UART_EnsureStarted	8	static
+../Core/gui/ui_uart.c:71:6:UI_UART_ReInit	8	static
+../Core/gui/ui_uart.c:90:6:UI_UART_DeInitLowPower	8	static
+../Core/gui/ui_uart.c:101:6:UI_UART_ResetRxBuffer	8	static
+../Core/gui/ui_uart.c:109:6:UI_UART_RxCpltCallback	16	static
+../Core/gui/ui_uart.c:136:6:UI_UART_ErrorCallback	0	static
+../Core/gui/ui_uart.c:145:6:UI_UART_ReadByte	0	static
+../Core/gui/ui_uart.c:150:6:UI_UART_SendBytes	16	static
+../Core/gui/ui_uart.c:160:6:UI_UART_SendString	8	static
+../Core/gui/ui_uart.c:166:10:UI_UART_GetLastRxMs	0	static

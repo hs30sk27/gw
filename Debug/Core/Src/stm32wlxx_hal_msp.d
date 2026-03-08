@@ -1,5 +1,5 @@
-Core/gui/gw_catm1.o: ../Core/gui/gw_catm1.c ../Core/gui/gw_catm1.h \
- ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal.h \
+Core/Src/stm32wlxx_hal_msp.o: ../Core/Src/stm32wlxx_hal_msp.c \
+ ../Core/Inc/main.h ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal.h \
  ../Core/Inc/stm32wlxx_hal_conf.h \
  ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal_dma.h \
  ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal_def.h \
@@ -41,14 +41,9 @@ Core/gui/gw_catm1.o: ../Core/gui/gw_catm1.c ../Core/gui/gw_catm1.h \
  ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal_uart.h \
  ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal_uart_ex.h \
  ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_ll_system.h \
- ../Core/gui/gw_storage.h ../Core/gui/ui_conf.h ../Core/Inc/main.h \
  D:/work26/gw/Core/gui/ui_core.h D:/work26/gw/Core/gui/gw_app.h \
- D:/work26/gw/Core/gui/ui_lpm.h ../Core/Inc/utilities_conf.h \
- ../Drivers/CMSIS/Include/cmsis_compiler.h ../Utilities/misc/stm32_mem.h \
- ../Utilities/misc/stm32_tiny_vsnprintf.h ../Core/Inc/utilities_def.h \
- ../Core/gui/ui_types.h ../Core/gui/ui_time.h ../Core/gui/ui_lpm.h \
- ../Core/gui/ui_ringbuf.h
-../Core/gui/gw_catm1.h:
+ D:/work26/gw/Core/gui/ui_lpm.h
+../Core/Inc/main.h:
 ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal.h:
 ../Core/Inc/stm32wlxx_hal_conf.h:
 ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal_dma.h:
@@ -91,18 +86,6 @@ Core/gui/gw_catm1.o: ../Core/gui/gw_catm1.c ../Core/gui/gw_catm1.h \
 ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal_uart.h:
 ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_hal_uart_ex.h:
 ../Drivers/STM32WLxx_HAL_Driver/Inc/stm32wlxx_ll_system.h:
-../Core/gui/gw_storage.h:
-../Core/gui/ui_conf.h:
-../Core/Inc/main.h:
 D:/work26/gw/Core/gui/ui_core.h:
 D:/work26/gw/Core/gui/gw_app.h:
 D:/work26/gw/Core/gui/ui_lpm.h:
-../Core/Inc/utilities_conf.h:
-../Drivers/CMSIS/Include/cmsis_compiler.h:
-../Utilities/misc/stm32_mem.h:
-../Utilities/misc/stm32_tiny_vsnprintf.h:
-../Core/Inc/utilities_def.h:
-../Core/gui/ui_types.h:
-../Core/gui/ui_time.h:
-../Core/gui/ui_lpm.h:
-../Core/gui/ui_ringbuf.h:
