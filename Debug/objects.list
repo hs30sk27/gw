@@ -13,7 +13,6 @@
 "./Core/gui/gw_app.o"
 "./Core/gui/gw_ble_report.o"
 "./Core/gui/gw_catm1.o"
-"./Core/gui/gw_catm1_fast_sms_ready_code.o"
 "./Core/gui/gw_file_cmd.o"
 "./Core/gui/gw_sensors.o"
 "./Core/gui/gw_storage.o"
