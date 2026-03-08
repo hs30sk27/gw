@@ -1,2 +1,0 @@
-../Core/gui/gw_ble_report.c:10:13:prv_node_valid	8
-../Core/gui/gw_ble_report.c:99:6:GW_BleReport_SendMinuteTestRecord	10
