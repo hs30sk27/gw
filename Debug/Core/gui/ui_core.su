@@ -1,5 +1,0 @@
-../Core/gui/ui_core.c:36:13:prv_cmdrx_reset	0	static
-../Core/gui/ui_core.c:20:13:UI_Hook_OnOpKeyPressed	0	static
-../Core/gui/ui_core.c:134:13:UI_TaskMain	24	static
-../Core/gui/ui_core.c:187:6:UI_Core_ClearFlagsBeforeStop	0	static
-../Core/gui/ui_core.c:192:6:UI_Init	8	static
