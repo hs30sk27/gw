@@ -21,6 +21,8 @@ static UI_RingBuf_t s_catm1_rb;
 static bool s_catm1_rb_ready = false;
 static volatile uint32_t s_catm1_last_rx_ms = 0u;
 static volatile uint32_t s_catm1_last_poweroff_ms = 0u;
+static volatile bool s_catm1_waiting_boot_sms_ready = false;
+static volatile bool s_catm1_boot_sms_ready_seen = false;
 static int64_t s_time_sync_delta_sec_buf[GW_CATM1_TIME_SYNC_DELTA_BUF_LEN];
 static uint8_t s_time_sync_delta_wr = 0u;
 static uint8_t s_time_sync_delta_count = 0u;
@@ -41,7 +43,7 @@ static uint8_t s_time_sync_delta_count = 0u;
 #define GW_CATM1_NTP_TIMEOUT_MS (65000u)
 #endif
 #ifndef GW_CATM1_BOOT_URC_WAIT_MS
-#define GW_CATM1_BOOT_URC_WAIT_MS (8000u)
+#define GW_CATM1_BOOT_URC_WAIT_MS (15000u)
 #endif
 #ifndef GW_CATM1_BOOT_QUIET_MS
 #define GW_CATM1_BOOT_QUIET_MS (400u)
@@ -80,16 +82,16 @@ static uint8_t s_time_sync_delta_count = 0u;
 #define GW_CATM1_CCLK_QUERY_COMP_MAX_CENTI (250u)
 #endif
 #ifndef GW_CATM1_POST_SMS_READY_SETTLE_MS
-#define GW_CATM1_POST_SMS_READY_SETTLE_MS (1500u)
+#define GW_CATM1_POST_SMS_READY_SETTLE_MS (2000u)
 #endif
 #ifndef GW_CATM1_POST_SMS_READY_AT_SYNC_WINDOW_MS
-#define GW_CATM1_POST_SMS_READY_AT_SYNC_WINDOW_MS (8000u)
+#define GW_CATM1_POST_SMS_READY_AT_SYNC_WINDOW_MS (12000u)
 #endif
 #ifndef GW_CATM1_POST_SMS_READY_RETRY_GAP_MS
 #define GW_CATM1_POST_SMS_READY_RETRY_GAP_MS (300u)
 #endif
 #ifndef GW_CATM1_POWER_CYCLE_GUARD_MS
-#define GW_CATM1_POWER_CYCLE_GUARD_MS (2000u)
+#define GW_CATM1_POWER_CYCLE_GUARD_MS (3500u)
 #endif
 #ifndef GW_CATM1_SESSION_RESYNC_QUIET_MS
 #define GW_CATM1_SESSION_RESYNC_QUIET_MS (200u)
@@ -372,6 +374,9 @@ static void prv_get_server(uint8_t ip[4], uint16_t* port)
 
 static bool prv_uart_send_bytes(const void* data, uint16_t len, uint32_t timeout_ms)
 {
+    if (s_catm1_waiting_boot_sms_ready && !s_catm1_boot_sms_ready_seen) {
+        return false;
+    }
     if (!prv_lpuart_ensure()) {
         return false;
     }
@@ -625,8 +630,15 @@ static bool prv_wait_sim_ready(void)
 static bool prv_wait_boot_sms_ready(void)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
+    bool ready = false;
+
     rsp[0] = '\0';
-    return prv_uart_wait_for(rsp, sizeof(rsp), GW_CATM1_BOOT_URC_WAIT_MS, "SMS Ready", NULL, NULL);
+    ready = prv_uart_wait_for(rsp, sizeof(rsp), GW_CATM1_BOOT_URC_WAIT_MS, "SMS Ready", NULL, NULL);
+    if (ready) {
+        s_catm1_boot_sms_ready_seen = true;
+        s_catm1_waiting_boot_sms_ready = false;
+    }
+    return ready;
 }
 
 static bool prv_try_session_resync(void)
@@ -679,28 +691,22 @@ static bool prv_start_session(bool enable_time_auto_update)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
     bool cpin_ready = false;
-    bool reuse_live_session = false;
 
+    /* TCP/session 시작은 항상 fresh boot로만 진행한다.
+     * stale session_at_ok 때문에 SMS Ready 이전에 AT가 먼저 나가는 경로를 차단한다. */
     prv_uart_flush_rx();
+    s_catm1_session_at_ok = false;
+    s_catm1_boot_sms_ready_seen = false;
+    s_catm1_waiting_boot_sms_ready = true;
 
-    /* 이미 살아 있는 세션에서만 AT resync를 시도한다.
-     * power-on 직후 session_at_ok가 없는 상태에서는 SMS Ready 이전에
-     * AT/CTZU/CEREG/CGATT를 보내지 않는다. */
-    if (s_catm1_session_at_ok) {
-        reuse_live_session = prv_try_session_resync();
+    GW_Catm1_PowerOn();
+    prv_delay_ms(UI_CATM1_BOOT_WAIT_MS);
+
+    if (!prv_wait_boot_sms_ready()) {
+        return false;
     }
-
-    if (!reuse_live_session) {
-        s_catm1_session_at_ok = false;
-        GW_Catm1_PowerOn();
-        prv_delay_ms(UI_CATM1_BOOT_WAIT_MS);
-
-        if (!prv_wait_boot_sms_ready()) {
-            return false;
-        }
-        if (!prv_wait_at_sync_after_sms_ready()) {
-            return false;
-        }
+    if (!prv_wait_at_sync_after_sms_ready()) {
+        return false;
     }
 
     rsp[0] = '\0';
@@ -1476,6 +1482,9 @@ void GW_Catm1_UartErrorCallback(UART_HandleTypeDef *huart)
 void GW_Catm1_Init(void)
 {
     prv_catm1_rb_reset();
+    s_catm1_session_at_ok = false;
+    s_catm1_boot_sms_ready_seen = false;
+    s_catm1_waiting_boot_sms_ready = false;
     prv_power_leds_blink_twice();
 }
 
@@ -1483,6 +1492,8 @@ void GW_Catm1_PowerOn(void)
 {
     uint32_t now = HAL_GetTick();
     s_catm1_session_at_ok = false;
+    s_catm1_boot_sms_ready_seen = false;
+    s_catm1_waiting_boot_sms_ready = true;
 
     if (s_catm1_last_poweroff_ms != 0u) {
         uint32_t elapsed = (uint32_t)(now - s_catm1_last_poweroff_ms);
@@ -1531,6 +1542,8 @@ void GW_Catm1_PowerOff(void)
     HAL_GPIO_WritePin(CATM1_PWR_GPIO_Port, CATM1_PWR_Pin, GPIO_PIN_RESET);
 #endif
     s_catm1_session_at_ok = false;
+    s_catm1_boot_sms_ready_seen = false;
+    s_catm1_waiting_boot_sms_ready = false;
     s_catm1_last_poweroff_ms = HAL_GetTick();
 }
 
