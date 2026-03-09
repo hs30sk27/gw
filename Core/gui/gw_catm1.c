@@ -84,6 +84,9 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_AT_SYNC_MAX_TRY
 #define GW_CATM1_AT_SYNC_MAX_TRY (4u)
 #endif
+#ifndef GW_CATM1_TCP_OPEN_HARD_TIMEOUT_MS
+#define GW_CATM1_TCP_OPEN_HARD_TIMEOUT_MS (12000u)
+#endif
 #ifndef GW_CATM1_CCLK_QUERY_COMP_MAX_CENTI
 #define GW_CATM1_CCLK_QUERY_COMP_MAX_CENTI (250u)
 #endif
@@ -1183,17 +1186,101 @@ static bool prv_activate_pdp(void)
     return false;
 }
 
+static bool prv_parse_caopen_result(const char* rsp, uint8_t* out_cid, uint8_t* out_result)
+{
+    const char* p;
+    unsigned cid = 0u;
+    unsigned result = 0u;
+
+    if (rsp == NULL) {
+        return false;
+    }
+
+    p = rsp;
+    while ((p = strstr(p, "+CAOPEN:")) != NULL) {
+        if (((sscanf(p, "+CAOPEN: %u,%u", &cid, &result) == 2) ||
+             (sscanf(p, "+CAOPEN:%u,%u", &cid, &result) == 2))) {
+            if (out_cid != NULL) {
+                *out_cid = (uint8_t)cid;
+            }
+            if (out_result != NULL) {
+                *out_result = (uint8_t)result;
+            }
+            return true;
+        }
+        p += 8; /* strlen("+CAOPEN:") */
+    }
+
+    return false;
+}
+
 static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
 {
     char cmd[96];
     char rsp[UI_CATM1_RX_BUF_SZ];
+    uint8_t ch = 0u;
+    uint8_t cid = 0xFFu;
+    uint8_t result = 0xFFu;
+    uint32_t start;
+    uint32_t timeout_ms = UI_CATM1_TCP_OPEN_TIMEOUT_MS;
+    size_t n = 0u;
+
+    if ((timeout_ms == 0u) || (timeout_ms > GW_CATM1_TCP_OPEN_HARD_TIMEOUT_MS)) {
+        timeout_ms = GW_CATM1_TCP_OPEN_HARD_TIMEOUT_MS;
+    }
 
     if (!prv_send_cmd_wait("AT+CACID=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
         return false;
     }
+
+    /* 이전 세션에 남은 소켓이 있으면 새 open이 오래 붙잡힐 수 있어 먼저 정리한다. */
+    (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+
     (void)snprintf(cmd, sizeof(cmd), "AT+CAOPEN=0,0,\"TCP\",\"%u.%u.%u.%u\",%u\r\n",
                    (unsigned)ip[0], (unsigned)ip[1], (unsigned)ip[2], (unsigned)ip[3], (unsigned)port);
-    return prv_send_cmd_wait(cmd, "+CAOPEN: 0,0", NULL, NULL, UI_CATM1_TCP_OPEN_TIMEOUT_MS, rsp, sizeof(rsp));
+
+    prv_uart_flush_rx();
+    if (!prv_uart_send_text(cmd, UI_CATM1_AT_TIMEOUT_MS)) {
+        return false;
+    }
+
+    rsp[0] = '\0';
+    start = HAL_GetTick();
+    while ((uint32_t)(HAL_GetTick() - start) < timeout_ms) {
+        if (!prv_catm1_rb_pop_wait(&ch, 20u)) {
+            continue;
+        }
+        if (ch == 0u) {
+            continue;
+        }
+
+        if ((n + 1u) < sizeof(rsp)) {
+            rsp[n++] = (char)ch;
+            rsp[n] = '\0';
+        } else if (sizeof(rsp) > 16u) {
+            size_t keep = (sizeof(rsp) / 2u);
+            memmove(rsp, &rsp[sizeof(rsp) - keep - 1u], keep);
+            n = keep;
+            rsp[n++] = (char)ch;
+            rsp[n] = '\0';
+        }
+
+        if ((strstr(rsp, "ERROR") != NULL) || (strstr(rsp, "+CME ERROR") != NULL)) {
+            (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+            return false;
+        }
+
+        if (prv_parse_caopen_result(rsp, &cid, &result) && (cid == 0u)) {
+            if (result == 0u) {
+                return true;
+            }
+            (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+            return false;
+        }
+    }
+
+    (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+    return false;
 }
 
 static bool prv_query_caack(uint32_t* out_total, uint32_t* out_unack)
