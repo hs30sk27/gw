@@ -12,6 +12,8 @@
 #include <stdarg.h>
 
 extern UART_HandleTypeDef hlpuart1;
+extern bool GW_Storage_SaveHourRec(const GW_HourRec_t* rec);
+extern uint32_t GW_Storage_GetTotalRecordCount(void);
 
 static volatile bool s_catm1_busy = false;
 static volatile bool s_catm1_session_at_ok = false;
@@ -1667,6 +1669,43 @@ cleanup:
     return success;
 }
 
+static bool prv_store_failed_snapshot_to_flash(const GW_HourRec_t* rec)
+{
+    uint32_t before_cnt;
+    uint32_t after_cnt;
+    uint32_t try_idx;
+    GW_FileRec_t last_rec;
+    const UI_Config_t* cfg;
+    uint8_t cur_gw_num;
+
+    if (rec == NULL) {
+        return false;
+    }
+
+    cfg = UI_GetConfig();
+    cur_gw_num = (cfg != NULL) ? cfg->gw_num : 0u;
+
+    before_cnt = GW_Storage_GetTotalRecordCount();
+    if ((before_cnt > 0u) &&
+        GW_Storage_ReadRecordByGlobalIndex(before_cnt - 1u, &last_rec, NULL) &&
+        (last_rec.rec.epoch_sec == rec->epoch_sec) &&
+        (last_rec.gw_num == cur_gw_num)) {
+        return true;
+    }
+
+    for (try_idx = 0u; try_idx < 2u; try_idx++) {
+        if (!GW_Storage_SaveHourRec(rec)) {
+            continue;
+        }
+        after_cnt = GW_Storage_GetTotalRecordCount();
+        if (after_cnt > before_cnt) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
 {
     uint8_t ip[4];
@@ -1676,6 +1715,7 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
     bool success = false;
     bool opened = false;
     bool pdp_active = false;
+    bool should_store_on_fail = false;
     size_t len;
     GW_HourRec_t live_rec;
 
@@ -1696,6 +1736,7 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
         return false;
     }
 
+    should_store_on_fail = true;
     prv_get_server(ip, &port);
     UI_LPM_LockStop();
     GW_Catm1_SetBusy(true);
@@ -1733,6 +1774,9 @@ cleanup:
     prv_lpuart_release();
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
+    if ((!success) && should_store_on_fail) {
+        (void)prv_store_failed_snapshot_to_flash(&live_rec);
+    }
     return success;
 }
 
