@@ -1,6 +1,0 @@
-../Core/gui/gw_file_cmd.c:82:20:prv_trim_arg.constprop	10
-../Core/gui/gw_file_cmd.c:29:13:prv_dt.constprop	1
-../Core/gui/gw_file_cmd.c:116:13:prv_rec_cb	14
-../Core/gui/gw_file_cmd.c:195:6:GW_FileCmd_List	2
-../Core/gui/gw_file_cmd.c:224:6:GW_FileCmd_ReadArg	9
-../Core/gui/gw_file_cmd.c:264:6:GW_FileCmd_DeleteArg	9
