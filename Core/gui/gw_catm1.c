@@ -29,6 +29,10 @@ static int64_t s_time_sync_delta_sec_buf[GW_CATM1_TIME_SYNC_DELTA_BUF_LEN];
 static uint8_t s_time_sync_delta_wr = 0u;
 static uint8_t s_time_sync_delta_count = 0u;
 
+static bool s_failed_snapshot_queued_valid = false;
+static uint32_t s_failed_snapshot_queued_epoch_sec = 0u;
+static uint8_t s_failed_snapshot_queued_gw_num = 0u;
+
 #ifndef GW_CATM1_NTP_HOST
 #define GW_CATM1_NTP_HOST "pool.ntp.org"
 #endif
@@ -216,6 +220,7 @@ static void prv_format_epoch2016(uint32_t epoch_sec, char* out, size_t out_sz)
 
 static bool prv_activate_pdp(void);
 static void prv_enable_network_time_auto_update(void);
+static void prv_note_failed_snapshot_sent(void);
 static bool prv_wait_eps_registered(void);
 static bool prv_wait_eps_registered_until(uint32_t timeout_ms);
 static bool prv_wait_ps_attached(void);
@@ -1669,12 +1674,18 @@ cleanup:
     return success;
 }
 
+static void prv_note_failed_snapshot_sent(void)
+{
+    s_failed_snapshot_queued_valid = false;
+    s_failed_snapshot_queued_epoch_sec = 0u;
+    s_failed_snapshot_queued_gw_num = 0u;
+}
+
 static bool prv_store_failed_snapshot_to_flash(const GW_HourRec_t* rec)
 {
     uint32_t before_cnt;
     uint32_t after_cnt;
     uint32_t try_idx;
-    GW_FileRec_t last_rec;
     const UI_Config_t* cfg;
     uint8_t cur_gw_num;
 
@@ -1685,20 +1696,22 @@ static bool prv_store_failed_snapshot_to_flash(const GW_HourRec_t* rec)
     cfg = UI_GetConfig();
     cur_gw_num = (cfg != NULL) ? cfg->gw_num : 0u;
 
-    before_cnt = GW_Storage_GetTotalRecordCount();
-    if ((before_cnt > 0u) &&
-        GW_Storage_ReadRecordByGlobalIndex(before_cnt - 1u, &last_rec, NULL) &&
-        (last_rec.rec.epoch_sec == rec->epoch_sec) &&
-        (last_rec.gw_num == cur_gw_num)) {
+    if (s_failed_snapshot_queued_valid &&
+        (s_failed_snapshot_queued_epoch_sec == rec->epoch_sec) &&
+        (s_failed_snapshot_queued_gw_num == cur_gw_num)) {
         return true;
     }
 
+    before_cnt = GW_Storage_GetTotalRecordCount();
     for (try_idx = 0u; try_idx < 2u; try_idx++) {
         if (!GW_Storage_SaveHourRec(rec)) {
             continue;
         }
         after_cnt = GW_Storage_GetTotalRecordCount();
         if (after_cnt > before_cnt) {
+            s_failed_snapshot_queued_valid = true;
+            s_failed_snapshot_queued_epoch_sec = rec->epoch_sec;
+            s_failed_snapshot_queued_gw_num = cur_gw_num;
             return true;
         }
     }
@@ -1764,6 +1777,7 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
         goto cleanup;
     }
     success = true;
+    prv_note_failed_snapshot_sent();
 
 cleanup:
     if (opened) {
@@ -1851,6 +1865,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
         opened = false;
         (*out_sent_count)++;
+        prv_note_failed_snapshot_sent();
     }
     success = ((*out_sent_count) > 0u);
 
