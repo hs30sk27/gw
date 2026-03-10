@@ -163,12 +163,12 @@ static char prv_gw_voltage_flag(uint8_t gw_volt_x10)
     return (gw_volt_x10 >= UI_NODE_BATT_LOW_THRESHOLD_X10) ? 'Y' : 'N';
 }
 
-static char prv_node_voltage_flag(uint8_t batt_lvl)
+static const char* prv_node_voltage_text(uint8_t batt_lvl)
 {
     if (batt_lvl == UI_NODE_BATT_LVL_INVALID) {
-        return '-';
+        return "-";
     }
-    return (batt_lvl == UI_NODE_BATT_LVL_NORMAL) ? 'Y' : 'N';
+    return (batt_lvl == UI_NODE_BATT_LVL_NORMAL) ? "3.4" : "LOW";
 }
 
 static bool prv_is_leap_year(uint16_t year)
@@ -1651,7 +1651,7 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
 
     for (i = 0u; i < node_limit; i++) {
         const GW_NodeRec_t* r = &rec->nodes[i];
-        char node_volt_flag;
+        const char* node_volt_text;
         int node_temp_c;
 
         if (!prv_node_valid(r)) {
@@ -1662,12 +1662,12 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
             break;
         }
 
-        node_volt_flag = prv_node_voltage_flag(r->batt_lvl);
+        node_volt_text = prv_node_voltage_text(r->batt_lvl);
         node_temp_c = (int)r->temp_c;
         prv_append_fmt(out, out_sz, &len,
-                       ",ND:%02lu,V:%c,T:%d,X:%d,Y:%d,Z:%d,A:%u,P:%lu",
+                       ",ND:%02lu,V:%s,T:%d,X:%d,Y:%d,Z:%d,A:%u,P:%lu",
                        (unsigned long)i,
-                       node_volt_flag,
+                       node_volt_text,
                        node_temp_c,
                        (int)r->x,
                        (int)r->y,
