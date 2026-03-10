@@ -1938,6 +1938,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
     GW_FileRec_t file_rec;
     bool success = false;
     bool pdp_active = false;
+    bool opened = false;
     uint32_t i;
 
     if (out_sent_count != NULL) {
@@ -1972,9 +1973,12 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         goto cleanup;
     }
     pdp_active = true;
+    if (!prv_open_tcp(ip, port)) {
+        goto cleanup;
+    }
+    opened = true;
 
     for (i = 0u; i < max_count; i++) {
-        bool opened = false;
         size_t len;
 
         if (prv_tcp_blocked_by_ble()) {
@@ -1987,24 +1991,18 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         if (len == 0u) {
             break;
         }
-        if (!prv_open_tcp(ip, port)) {
-            break;
-        }
-        opened = true;
         if (!prv_send_tcp_payload(payload)) {
-            if (opened) {
-                (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
-            }
             break;
         }
-        (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
-        opened = false;
         (*out_sent_count)++;
         prv_note_failed_snapshot_sent();
     }
     success = ((*out_sent_count) > 0u);
 
 cleanup:
+    if (opened) {
+        (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+    }
     (void)pdp_active;
     GW_Catm1_PowerOff();
     prv_lpuart_release();

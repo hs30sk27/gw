@@ -572,6 +572,29 @@ static bool prv_save_hour_rec_verified(const GW_HourRec_t* rec)
     return false;
 }
 
+static bool prv_flash_tail_matches_rec(const GW_HourRec_t* rec)
+{
+    GW_FileRec_t last_rec;
+    uint32_t tail;
+    const UI_Config_t* cfg = UI_GetConfig();
+    uint8_t cur_gw_num = (cfg != NULL) ? cfg->gw_num : 0u;
+
+    if (rec == NULL) {
+        return false;
+    }
+
+    tail = GW_Storage_GetTotalRecordCount();
+    if (tail == 0u) {
+        return false;
+    }
+    if (!GW_Storage_ReadRecordByGlobalIndex(tail - 1u, &last_rec, NULL)) {
+        return false;
+    }
+
+    return ((last_rec.gw_num == cur_gw_num) &&
+            (last_rec.rec.epoch_sec == rec->epoch_sec));
+}
+
 static void prv_handle_test50_actions(uint32_t now_sec)
 {
     uint32_t now_minute_id = now_sec / 60u;
@@ -660,15 +683,25 @@ static bool prv_run_catm1_uplink_now(void)
         return false;
     }
     s_catm1_uplink_pending = false;
+    rec = prv_get_catm1_uplink_record();
     pending = prv_flash_tx_pending_count();
     if (pending > 0u) {
         GW_FileRec_t first_rec;
         uint32_t sent_count = 0u;
-        uint32_t batch_count = pending;
+        uint32_t batch_count;
+
+        if ((rec != NULL) && !prv_flash_tail_matches_rec(rec)) {
+            bool saved_ok = prv_save_hour_rec_verified(rec);
+            prv_flash_tx_note_saved(saved_ok);
+        }
+
+        pending = prv_flash_tx_pending_count();
+        batch_count = pending;
         if (batch_count > GW_FLASH_TX_BACKLOG_MAX) {
             batch_count = GW_FLASH_TX_BACKLOG_MAX;
         }
-        if (!GW_Storage_ReadRecordByGlobalIndex(s_flash_tx_next_send_index, &first_rec, NULL)) {
+        if ((batch_count == 0u) ||
+            !GW_Storage_ReadRecordByGlobalIndex(s_flash_tx_next_send_index, &first_rec, NULL)) {
             prv_flash_tx_reset_to_tail();
             pending = 0u;
         } else {
@@ -681,7 +714,6 @@ static bool prv_run_catm1_uplink_now(void)
             return true;
         }
     }
-    rec = prv_get_catm1_uplink_record();
     (void)GW_Catm1_SendSnapshot(rec);
     prv_schedule_wakeup();
     return true;
