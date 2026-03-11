@@ -31,6 +31,10 @@ void UI_BLE_Disable(void);
 
 bool UI_BLE_IsActive(void);
 
+/* TEST START 세션 등에서 BLE 자동 종료를 막는 유지 모드 */
+void UI_BLE_SetPersistent(bool enable);
+bool UI_BLE_IsPersistent(void);
+
 /*
  * BLE 전원 ON 직후 UART init 지연을 강제한다.
  * - 메인 컨텍스트에서만 호출

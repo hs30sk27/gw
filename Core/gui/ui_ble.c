@@ -21,6 +21,7 @@ static volatile uint32_t s_evt_flags = 0;
 #define BLE_EVT_UART_INIT  (1u << 3)
 
 static bool s_ble_active = false;
+static bool s_ble_persistent = false;
 static bool s_led_on = false;
 static bool s_uart_init_pending = false;
 static uint32_t s_uart_ready_deadline_ms = 0;
@@ -188,9 +189,16 @@ void UI_BLE_Process(void)
     /* (2) 3분 타임아웃: BLE OFF 후 stop mode 진입 */
     if ((ev & BLE_EVT_TIMEOUT) != 0u)
     {
-        UI_BLE_Disable();
-        UI_LPM_EnterStopNow();
-        /* 다른 이벤트(LED 정리 등)도 처리할 수 있으므로 return 하지 않음 */
+        if (s_ble_active && s_ble_persistent)
+        {
+            UI_BLE_EnableForMs(UI_BLE_ACTIVE_MS);
+        }
+        else
+        {
+            UI_BLE_Disable();
+            UI_LPM_EnterStopNow();
+            /* 다른 이벤트(LED 정리 등)도 처리할 수 있으므로 return 하지 않음 */
+        }
     }
 
     /* (3) BT_EN ON 후 UART1/LPUART1 init 지연 처리 */
@@ -248,6 +256,7 @@ void UI_BLE_Init(void)
 #endif
 
     s_ble_active = false;
+    s_ble_persistent = false;
     s_led_on = false;
     s_uart_init_pending = false;
     s_uart_ready_deadline_ms = 0;
@@ -327,6 +336,7 @@ void UI_BLE_Disable(void)
 #endif
 
     s_ble_active = false;
+    s_ble_persistent = false;
     s_uart_init_pending = false;
     s_uart_ready_deadline_ms = 0;
     s_bt_on_tick_ms = 0;
@@ -338,6 +348,20 @@ void UI_BLE_Disable(void)
 bool UI_BLE_IsActive(void)
 {
     return s_ble_active;
+}
+
+void UI_BLE_SetPersistent(bool enable)
+{
+    s_ble_persistent = enable;
+    if (enable && s_ble_active)
+    {
+        UI_BLE_EnableForMs(UI_BLE_ACTIVE_MS);
+    }
+}
+
+bool UI_BLE_IsPersistent(void)
+{
+    return s_ble_persistent;
 }
 
 void UI_BLE_RequestStopNow(void)
@@ -355,6 +379,7 @@ void UI_BLE_ClearFlagsBeforeStop(void)
 
     s_evt_flags  = 0;
     s_ble_active = false;
+    s_ble_persistent = false;
     s_led_on     = false;
     s_uart_init_pending = false;
     s_uart_ready_deadline_ms = 0;

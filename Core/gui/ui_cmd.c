@@ -16,6 +16,7 @@ __weak void UI_Hook_OnConfigChanged(void) {}
 __weak void UI_Hook_OnTimeChanged(void) {}
 __weak void UI_Hook_OnBeaconOnceRequested(void) {}
 __weak void UI_Hook_OnBleEndRequested(void) {}
+__weak void UI_Hook_OnTestStartRequested(void) {}
 
 /* -------------------------------------------------------------------------- */
 static void prv_send_ok(void)
@@ -195,6 +196,14 @@ void UI_Cmd_ProcessLine(const char* line_in)
 
     /* 요구사항: BLE active 연장은 유효한 <...> 프레임일 때만 수행 */
     UI_BLE_ExtendMs(UI_BLE_ACTIVE_MS);
+
+    /* -------------------- TEST START -------------------- */
+    if (prv_cmd_equals_relaxed(p, "TEST START"))
+    {
+        UI_Hook_OnTestStartRequested();
+        prv_send_ok();
+        return;
+    }
 
     /* -------------------- SETTING READ ------------------ */
     if (prv_cmd_equals_relaxed(p, "SETTING READ"))

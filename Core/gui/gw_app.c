@@ -7,9 +7,11 @@
 #include "ui_lpm.h"
 #include "ui_uart.h"
 #include "ui_radio.h"
+#include "ui_ble.h"
 #include "gw_storage.h"
 #include "gw_catm1.h"
 #include "gw_sensors.h"
+#include "gw_ble_report.h"
 #include "stm32_timer.h"
 #include "stm32_seq.h"
 #include "radio.h"
@@ -82,6 +84,7 @@ static bool prv_is_two_minute_mode_active(void);
 static bool prv_start_pending_beacon_burst(void);
 static void prv_cancel_pending_beacon_burst(void);
 static bool prv_get_reminder_offset_sec(uint32_t* out_offset_sec);
+static void prv_send_ble_test_report_if_active(const GW_HourRec_t* rec);
 
 static void prv_cancel_pending_beacon_burst(void)
 {
@@ -611,6 +614,19 @@ static void prv_handle_test50_actions(uint32_t now_sec)
         GW_Storage_PurgeOldFiles(s_last_cycle_rec.epoch_sec);
         prv_flash_tx_resync_after_storage_change();
     }
+}
+
+static void prv_send_ble_test_report_if_active(const GW_HourRec_t* rec)
+{
+    if (rec == NULL) {
+        return;
+    }
+    if (!UI_BLE_IsActive() || !UI_BLE_IsPersistent()) {
+        return;
+    }
+
+    UI_BLE_EnsureSerialReady();
+    (void)GW_BleReport_SendMinuteTestRecord(rec);
 }
 
 static bool prv_is_catm1_periodic_active(void)
@@ -1226,6 +1242,20 @@ void UI_Hook_OnTimeChanged(void)
     prv_schedule_wakeup();
 }
 
+void UI_Hook_OnTestStartRequested(void)
+{
+    if (!s_inited) {
+        return;
+    }
+
+    UI_BLE_SetPersistent(true);
+    if (s_last_cycle_valid) {
+        prv_send_ble_test_report_if_active(&s_last_cycle_rec);
+    } else {
+        prv_send_ble_test_report_if_active(&s_hour_rec);
+    }
+}
+
 void UI_Hook_OnBeaconOnceRequested(void)
 {
     if (!s_inited) {
@@ -1275,6 +1305,7 @@ static void prv_rx_next_slot(void)
         if (prv_is_minute_test_active()) {
             uint32_t now_sec = UI_Time_NowSec2016();
             prv_handle_test50_actions(now_sec);
+            prv_send_ble_test_report_if_active(&s_hour_rec);
             prv_request_catm1_uplink();
             if (prv_run_catm1_uplink_now()) {
                 return;
