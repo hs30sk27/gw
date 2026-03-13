@@ -30,6 +30,7 @@ static GW_State_t s_state = GW_STATE_IDLE;
 static bool s_inited = false;
 static UTIL_TIMER_Object_t s_tmr_wakeup;
 static UTIL_TIMER_Object_t s_tmr_led1_pulse;
+static UTIL_TIMER_Object_t s_tmr_ble_test_expire;
 static volatile uint32_t s_evt_flags = 0;
 
 #define GW_EVT_WAKEUP           (1u << 0)
@@ -39,10 +40,13 @@ static volatile uint32_t s_evt_flags = 0;
 #define GW_EVT_RADIO_RX_DONE    (1u << 4)
 #define GW_EVT_RADIO_RX_TIMEOUT (1u << 5)
 #define GW_EVT_RADIO_RX_ERROR   (1u << 6)
+#define GW_EVT_BLE_TEST_EXPIRE  (1u << 7)
 
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
+#define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
 
 static bool s_test_mode = false;
+static bool s_ble_test_session_active = false;
 static uint16_t s_beacon_counter = 0;
 static uint8_t s_slot_idx = 0;
 static uint8_t s_slot_cnt = 0;
@@ -85,6 +89,9 @@ static bool prv_start_pending_beacon_burst(void);
 static void prv_cancel_pending_beacon_burst(void);
 static bool prv_get_reminder_offset_sec(uint32_t* out_offset_sec);
 static void prv_send_ble_test_report_if_active(const GW_HourRec_t* rec);
+static void prv_start_ble_test_session(void);
+static void prv_stop_ble_test_session(bool disable_ble_now);
+static void prv_get_effective_setting_ascii(uint8_t out_setting_ascii[3]);
 
 static void prv_cancel_pending_beacon_burst(void)
 {
@@ -92,6 +99,13 @@ static void prv_cancel_pending_beacon_burst(void)
     s_beacon_burst_anchor_sec = 0u;
     s_beacon_burst_gap_ms = 0u;
     s_beacon_oneshot_pending = false;
+}
+
+static void prv_tmr_ble_test_expire_cb(void *context)
+{
+    (void)context;
+    s_evt_flags |= GW_EVT_BLE_TEST_EXPIRE;
+    UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
 static uint8_t prv_count_valid_nodes_in_rec(const GW_HourRec_t* rec)
@@ -300,13 +314,48 @@ static bool prv_is_event_due_now(uint64_t now_centi,
     return false;
 }
 
+static void prv_get_effective_setting_ascii(uint8_t out_setting_ascii[3])
+{
+    const UI_Config_t* cfg = UI_GetConfig();
+
+    if (out_setting_ascii == NULL) {
+        return;
+    }
+
+    if (s_ble_test_session_active) {
+        out_setting_ascii[0] = (uint8_t)'0';
+        out_setting_ascii[1] = (uint8_t)'1';
+        out_setting_ascii[2] = (uint8_t)'M';
+        return;
+    }
+
+    if (cfg == NULL) {
+        out_setting_ascii[0] = (uint8_t)'0';
+        out_setting_ascii[1] = (uint8_t)'0';
+        out_setting_ascii[2] = (uint8_t)'H';
+        return;
+    }
+
+    out_setting_ascii[0] = cfg->setting_ascii[0];
+    out_setting_ascii[1] = cfg->setting_ascii[1];
+    out_setting_ascii[2] = cfg->setting_ascii[2];
+}
+
 static bool prv_get_setting_value_unit_ascii_first(uint8_t* out_value, char* out_unit)
 {
     const UI_Config_t* cfg = UI_GetConfig();
     uint8_t value;
     char unit;
 
-    if ((out_value == NULL) || (out_unit == NULL) || (cfg == NULL)) {
+    if ((out_value == NULL) || (out_unit == NULL)) {
+        return false;
+    }
+    if (s_ble_test_session_active) {
+        *out_value = 1u;
+        *out_unit = 'M';
+        return true;
+    }
+    if (cfg == NULL) {
         return false;
     }
     if ((cfg->setting_ascii[0] >= (uint8_t)'0') &&
@@ -629,6 +678,38 @@ static void prv_send_ble_test_report_if_active(const GW_HourRec_t* rec)
     (void)GW_BleReport_SendMinuteTestRecord(rec);
 }
 
+static void prv_start_ble_test_session(void)
+{
+    s_ble_test_session_active = true;
+    UI_BLE_SetPersistent(true);
+    UI_BLE_EnableForMs(UI_BLE_ACTIVE_MS);
+
+    (void)UTIL_TIMER_Stop(&s_tmr_ble_test_expire);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_ble_test_expire, GW_BLE_TEST_SESSION_MS);
+    (void)UTIL_TIMER_Start(&s_tmr_ble_test_expire);
+
+    prv_update_test_mode();
+    if (s_state == GW_STATE_IDLE) {
+        prv_schedule_wakeup();
+    }
+}
+
+static void prv_stop_ble_test_session(bool disable_ble_now)
+{
+    s_ble_test_session_active = false;
+    (void)UTIL_TIMER_Stop(&s_tmr_ble_test_expire);
+    UI_BLE_SetPersistent(false);
+
+    if (disable_ble_now && UI_BLE_IsActive()) {
+        UI_BLE_Disable();
+    }
+
+    prv_update_test_mode();
+    if (s_state == GW_STATE_IDLE) {
+        prv_schedule_wakeup();
+    }
+}
+
 static bool prv_is_catm1_periodic_active(void)
 {
     uint32_t cycle_sec;
@@ -777,9 +858,11 @@ static bool prv_start_beacon_tx(uint32_t now_sec)
 {
     UI_DateTime_t dt;
     const UI_Config_t* cfg = UI_GetConfig();
+    uint8_t setting_ascii[3];
 
     UI_Time_Epoch2016_ToCalendar(now_sec, &dt);
-    (void)UI_Pkt_BuildBeacon(s_beacon_tx_payload, cfg->net_id, &dt, cfg->setting_ascii);
+    prv_get_effective_setting_ascii(setting_ascii);
+    (void)UI_Pkt_BuildBeacon(s_beacon_tx_payload, cfg->net_id, &dt, setting_ascii);
     if (!prv_radio_ready_for_tx()) {
         s_state = GW_STATE_IDLE;
         UI_LPM_UnlockStop();
@@ -839,6 +922,14 @@ void GW_App_Process(void)
     }
     s_evt_flags &= ~ev;
     prv_update_test_mode();
+
+    if ((ev & GW_EVT_BLE_TEST_EXPIRE) != 0u) {
+        prv_stop_ble_test_session(true);
+        ev &= ~GW_EVT_BLE_TEST_EXPIRE;
+        if (ev == 0u) {
+            return;
+        }
+    }
 
     if ((ev & GW_EVT_RADIO_TX_DONE) != 0u) {
         if (s_state == GW_STATE_BEACON_TX) {
@@ -1177,6 +1268,7 @@ void GW_App_Init(void)
 #endif
     (void)UTIL_TIMER_Create(&s_tmr_wakeup, 100u, UTIL_TIMER_ONESHOT, prv_tmr_wakeup_cb, NULL);
     (void)UTIL_TIMER_Create(&s_tmr_led1_pulse, 10u, UTIL_TIMER_ONESHOT, prv_led1_pulse_off_cb, NULL);
+    (void)UTIL_TIMER_Create(&s_tmr_ble_test_expire, GW_BLE_TEST_SESSION_MS, UTIL_TIMER_ONESHOT, prv_tmr_ble_test_expire_cb, NULL);
     GW_Storage_Init();
     prv_flash_tx_reset_to_tail();
     GW_Catm1_Init();
@@ -1185,6 +1277,7 @@ void GW_App_Init(void)
     s_evt_flags = 0;
     s_beacon_counter = 0;
     s_test_mode = false;
+    s_ble_test_session_active = false;
     prv_cancel_pending_beacon_burst();
     s_beacon_recovery_mode = false;
     s_last_cycle_valid = false;
@@ -1248,7 +1341,7 @@ void UI_Hook_OnTestStartRequested(void)
         return;
     }
 
-    UI_BLE_SetPersistent(true);
+    prv_start_ble_test_session();
     if (s_last_cycle_valid) {
         prv_send_ble_test_report_if_active(&s_last_cycle_rec);
     } else {
