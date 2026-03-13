@@ -104,9 +104,6 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_TCP_OPEN_FAIL_CPOWD_POST_TX_HOLD_MS
 #define GW_CATM1_TCP_OPEN_FAIL_CPOWD_POST_TX_HOLD_MS (150u)
 #endif
-#ifndef GW_CATM1_TCP_POST_CLOSE_PWRDOWN_GUARD_MS
-#define GW_CATM1_TCP_POST_CLOSE_PWRDOWN_GUARD_MS (300u)
-#endif
 #ifndef GW_CATM1_CCLK_QUERY_COMP_MAX_CENTI
 #define GW_CATM1_CCLK_QUERY_COMP_MAX_CENTI (250u)
 #endif
@@ -148,7 +145,14 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 static bool prv_tcp_blocked_by_ble(void)
 {
 #if UI_HAVE_BT_EN
-    return UI_BLE_IsActive();
+    if (!UI_BLE_IsActive()) {
+        return false;
+    }
+    /* TEST START 유지 모드에서는 BLE가 살아 있어도 TCP 업링크를 허용한다. */
+    if (UI_BLE_IsPersistent()) {
+        return false;
+    }
+    return true;
 #else
     return false;
 #endif
@@ -1470,19 +1474,6 @@ static bool prv_send_tcp_payload(const char* payload)
     return prv_wait_caack_drained(base_total, (uint32_t)len);
 }
 
-
-static void prv_close_tcp_if_open(bool* opened, char* rsp, size_t rsp_sz)
-{
-    if ((opened == NULL) || !(*opened)) {
-        return;
-    }
-
-    (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL,
-                            UI_CATM1_AT_TIMEOUT_MS, rsp, rsp_sz);
-    prv_delay_ms(GW_CATM1_TCP_POST_CLOSE_PWRDOWN_GUARD_MS);
-    *opened = false;
-}
-
 static bool prv_node_valid(const GW_NodeRec_t* r)
 {
     if (r == NULL) {
@@ -2087,7 +2078,9 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
     prv_note_failed_snapshot_sent();
 
 cleanup:
-    prv_close_tcp_if_open(&opened, rsp, sizeof(rsp));
+    if (opened) {
+        (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+    }
     (void)pdp_active;
     GW_Catm1_PowerOff();
     prv_lpuart_release();
@@ -2170,7 +2163,9 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
     success = ((*out_sent_count) > 0u);
 
 cleanup:
-    prv_close_tcp_if_open(&opened, rsp, sizeof(rsp));
+    if (opened) {
+        (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+    }
     (void)pdp_active;
     GW_Catm1_PowerOff();
     prv_lpuart_release();

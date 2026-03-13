@@ -51,6 +51,9 @@ static uint16_t s_beacon_counter = 0;
 static uint8_t s_slot_idx = 0;
 static uint8_t s_slot_cnt = 0;
 static uint32_t s_data_freq_hz = 0;
+static bool s_rx_cycle_minute_test = false;
+static uint32_t s_rx_cycle_stamp_sec = 0u;
+static uint32_t s_catm1_retry_not_before_ms = 0u;
 static bool s_beacon_oneshot_pending = false;
 static GW_HourRec_t s_hour_rec;
 static GW_HourRec_t s_last_cycle_rec;
@@ -647,10 +650,11 @@ static bool prv_flash_tail_matches_rec(const GW_HourRec_t* rec)
             (last_rec.rec.epoch_sec == rec->epoch_sec));
 }
 
-static void prv_handle_test50_actions(uint32_t now_sec)
+static void prv_handle_test50_actions_core(uint32_t now_sec, bool treat_as_minute_test)
 {
     uint32_t now_minute_id = now_sec / 60u;
-    if (!prv_is_minute_test_active()) {
+
+    if (!treat_as_minute_test) {
         return;
     }
     if ((!s_last_cycle_valid) || (s_last_cycle_minute_id != now_minute_id)) {
@@ -663,6 +667,11 @@ static void prv_handle_test50_actions(uint32_t now_sec)
         GW_Storage_PurgeOldFiles(s_last_cycle_rec.epoch_sec);
         prv_flash_tx_resync_after_storage_change();
     }
+}
+
+static void prv_handle_test50_actions(uint32_t now_sec)
+{
+    prv_handle_test50_actions_core(now_sec, prv_is_minute_test_active());
 }
 
 static void prv_send_ble_test_report_if_active(const GW_HourRec_t* rec)
@@ -772,6 +781,7 @@ static bool prv_run_catm1_uplink_now(void)
 {
     const GW_HourRec_t* rec;
     uint32_t pending;
+    uint32_t now_ms;
 
     if (!s_catm1_uplink_pending) {
         return false;
@@ -779,13 +789,23 @@ static bool prv_run_catm1_uplink_now(void)
     if (s_state != GW_STATE_IDLE) {
         return false;
     }
-    s_catm1_uplink_pending = false;
+
+    now_ms = HAL_GetTick();
+    if ((s_catm1_retry_not_before_ms != 0u) &&
+        ((int32_t)(now_ms - s_catm1_retry_not_before_ms) < 0)) {
+        return false;
+    }
+    if (GW_Catm1_IsBusy()) {
+        return false;
+    }
+
     rec = prv_get_catm1_uplink_record();
     pending = prv_flash_tx_pending_count();
     if (pending > 0u) {
         GW_FileRec_t first_rec;
         uint32_t sent_count = 0u;
         uint32_t batch_count;
+        bool sent_ok = false;
 
         if ((rec != NULL) && !prv_flash_tail_matches_rec(rec)) {
             bool saved_ok = prv_save_hour_rec_verified(rec);
@@ -802,18 +822,34 @@ static bool prv_run_catm1_uplink_now(void)
             prv_flash_tx_reset_to_tail();
             pending = 0u;
         } else {
-            (void)GW_Catm1_SendStoredRange(s_flash_tx_next_send_index, batch_count, &sent_count);
+            sent_ok = GW_Catm1_SendStoredRange(s_flash_tx_next_send_index, batch_count, &sent_count);
             if (sent_count > 0u) {
                 prv_flash_tx_note_sent(sent_count);
+                s_catm1_retry_not_before_ms = 0u;
+            } else if (!sent_ok) {
+                s_catm1_retry_not_before_ms = HAL_GetTick() + 1500u;
             }
             prv_flash_tx_resync_after_storage_change();
+            s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
             prv_schedule_wakeup();
             return true;
         }
     }
-    (void)GW_Catm1_SendSnapshot(rec);
-    prv_schedule_wakeup();
-    return true;
+
+    if (rec != NULL) {
+        bool sent_ok = GW_Catm1_SendSnapshot(rec);
+        if (sent_ok) {
+            s_catm1_retry_not_before_ms = 0u;
+            s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
+        } else {
+            s_catm1_retry_not_before_ms = HAL_GetTick() + 1500u;
+            s_catm1_uplink_pending = true;
+        }
+        prv_schedule_wakeup();
+        return true;
+    }
+
+    return false;
 }
 
 static void prv_requeue_events(uint32_t ev_mask)
@@ -1160,12 +1196,16 @@ void GW_App_Process(void)
                 return;
             }
             cycle_stamp_sec = prv_get_current_cycle_timestamp_sec();
+            s_rx_cycle_minute_test = prv_is_minute_test_active();
+            s_rx_cycle_stamp_sec = cycle_stamp_sec;
             UI_LPM_LockStop();
             s_state = GW_STATE_RX_SLOTS;
             prv_hour_rec_init(cycle_stamp_sec);
             if (!prv_arm_rx_slot()) {
                 s_state = GW_STATE_IDLE;
                 UI_LPM_UnlockStop();
+                s_rx_cycle_minute_test = false;
+                s_rx_cycle_stamp_sec = 0u;
                 prv_schedule_wakeup();
             }
             return;
@@ -1208,7 +1248,14 @@ static void prv_schedule_wakeup(void)
         return;
     }
     if (s_catm1_uplink_pending) {
-        prv_schedule_after_ms(10u);
+        uint32_t now_ms = HAL_GetTick();
+        if ((s_catm1_retry_not_before_ms != 0u) &&
+            ((int32_t)(now_ms - s_catm1_retry_not_before_ms) < 0)) {
+            prv_schedule_after_ms(s_catm1_retry_not_before_ms - now_ms);
+        } else {
+            s_catm1_retry_not_before_ms = 0u;
+            prv_schedule_after_ms(10u);
+        }
         return;
     }
 
@@ -1278,12 +1325,16 @@ void GW_App_Init(void)
     s_beacon_counter = 0;
     s_test_mode = false;
     s_ble_test_session_active = false;
+    s_rx_cycle_minute_test = false;
+    s_rx_cycle_stamp_sec = 0u;
+    s_catm1_retry_not_before_ms = 0u;
     prv_cancel_pending_beacon_burst();
     s_beacon_recovery_mode = false;
     s_last_cycle_valid = false;
     s_last_cycle_minute_id = 0u;
     s_last_save_minute_id = 0xFFFFFFFFu;
     s_catm1_uplink_pending = false;
+    s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     s_boot_time_sync_pending = true;
@@ -1300,6 +1351,7 @@ void UI_Hook_OnConfigChanged(void)
     }
     prv_cancel_pending_beacon_burst();
     s_catm1_uplink_pending = false;
+    s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
@@ -1314,7 +1366,7 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
         return;
     }
     s_last_save_minute_id = 0xFFFFFFFFu;
-    s_catm1_uplink_pending = false;
+    s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
@@ -1380,26 +1432,36 @@ static void prv_rx_next_slot(void)
         if (!prv_radio_ready_for_rx()) {
             s_state = GW_STATE_IDLE;
             UI_LPM_UnlockStop();
+            s_rx_cycle_minute_test = false;
+            s_rx_cycle_stamp_sec = 0u;
             prv_schedule_wakeup();
             return;
         }
         if (!prv_arm_rx_slot()) {
             s_state = GW_STATE_IDLE;
             UI_LPM_UnlockStop();
+            s_rx_cycle_minute_test = false;
+            s_rx_cycle_stamp_sec = 0u;
             prv_schedule_wakeup();
             return;
         }
     } else {
         s_state = GW_STATE_IDLE;
         UI_LPM_UnlockStop();
-        s_hour_rec.epoch_sec = prv_get_current_cycle_timestamp_sec();
+        if (s_rx_cycle_stamp_sec != 0u) {
+            s_hour_rec.epoch_sec = s_rx_cycle_stamp_sec;
+        } else {
+            s_hour_rec.epoch_sec = prv_get_current_cycle_timestamp_sec();
+        }
         prv_mark_cycle_complete(&s_hour_rec);
         prv_update_beacon_recovery_mode_from_rec(&s_hour_rec);
-        if (prv_is_minute_test_active()) {
+        if (s_rx_cycle_minute_test) {
             uint32_t now_sec = UI_Time_NowSec2016();
-            prv_handle_test50_actions(now_sec);
+            prv_handle_test50_actions_core(now_sec, true);
             prv_send_ble_test_report_if_active(&s_hour_rec);
             prv_request_catm1_uplink();
+            s_rx_cycle_minute_test = false;
+            s_rx_cycle_stamp_sec = 0u;
             if (prv_run_catm1_uplink_now()) {
                 return;
             }
@@ -1408,6 +1470,8 @@ static void prv_rx_next_slot(void)
             prv_flash_tx_note_saved(saved_ok);
             GW_Storage_PurgeOldFiles(s_hour_rec.epoch_sec);
             prv_flash_tx_resync_after_storage_change();
+            s_rx_cycle_minute_test = false;
+            s_rx_cycle_stamp_sec = 0u;
         }
         prv_schedule_wakeup();
     }
