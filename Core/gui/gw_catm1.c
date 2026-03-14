@@ -31,6 +31,7 @@ static volatile bool s_catm1_tcp_open_fail_powerdown_pending = false;
 static int64_t s_time_sync_delta_sec_buf[GW_CATM1_TIME_SYNC_DELTA_BUF_LEN];
 static uint8_t s_time_sync_delta_wr = 0u;
 static uint8_t s_time_sync_delta_count = 0u;
+static bool s_catm1_time_auto_update_attempted_this_power = false;
 
 static bool s_failed_snapshot_queued_valid = false;
 static uint32_t s_failed_snapshot_queued_epoch_sec = 0u;
@@ -268,6 +269,7 @@ static void prv_format_epoch2016(uint32_t epoch_sec, char* out, size_t out_sz)
 
 static bool prv_activate_pdp(void);
 static void prv_enable_network_time_auto_update(void);
+static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup);
 static void prv_force_power_cut(void);
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz);
 static void prv_note_failed_snapshot_sent(void);
@@ -788,8 +790,8 @@ static bool prv_start_session(bool enable_time_auto_update)
     rsp[0] = '\0';
     (void)prv_send_cmd_wait("AT+CEREG=2\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
 
-    /* CTZU/CLTS는 등록 직전 단계에서 URC를 쏟아 query를 흔들 수 있어
-     * 실제 시간 동기화 경로(prv_sync_time_from_modem_startup)로 defer 한다. */
+    /* CTZU/AT&W는 실제 시간 동기화 경로(prv_sync_time_from_modem_startup)에서
+     * 전원 인가당 한 번만 처리한다. */
     if (enable_time_auto_update) {
         prv_wait_rx_quiet(100u, 400u);
     }
@@ -805,9 +807,21 @@ static bool prv_start_session(bool enable_time_auto_update)
 static void prv_enable_network_time_auto_update(void)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
-    if (!prv_send_cmd_wait("AT+CTZU=1\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
-        (void)prv_send_cmd_wait("AT+CLTS=1\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+
+    if (s_catm1_time_auto_update_attempted_this_power) {
+        return;
     }
+
+    s_catm1_time_auto_update_attempted_this_power = true;
+    rsp[0] = '\0';
+    if (!prv_send_cmd_wait("AT+CTZU=1\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return;
+    }
+
+    prv_wait_rx_quiet(100u, 400u);
+    rsp[0] = '\0';
+    (void)prv_send_cmd_wait("AT&W\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+    prv_wait_rx_quiet(100u, 400u);
 }
 
 static bool prv_is_invalid_cclk_rsp(const char* rsp)
@@ -963,7 +977,7 @@ static bool prv_ntp_sync_time(uint64_t* out_epoch_centi)
     return prv_query_network_time_epoch_retry(6u, 1000u, false, out_epoch_centi);
 }
 
-static bool prv_sync_time_from_modem_startup(void)
+static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup)
 {
     uint64_t epoch_centi = 0u;
     int64_t delta_sec;
@@ -981,7 +995,10 @@ static bool prv_sync_time_from_modem_startup(void)
         return false;
     }
 
-    prv_enable_network_time_auto_update();
+    if (run_time_auto_update_setup) {
+        prv_enable_network_time_auto_update();
+    }
+
     (void)prv_send_query_wait_prefix_ok("AT+CEREG?\r\n", "+CEREG:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
     (void)prv_send_query_wait_prefix_ok("AT+CGATT?\r\n", "+CGATT:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
 
@@ -1019,8 +1036,20 @@ apply_time:
     delta_sec = (int64_t)(epoch_centi / 100u) - (int64_t)UI_Time_NowSec2016();
     prv_time_sync_delta_push(delta_sec);
     UI_Time_SetEpochCenti2016(epoch_centi);
-    prv_enable_network_time_auto_update();
     return true;
+}
+
+static bool prv_sync_time_from_modem_startup(void)
+{
+    if (prv_sync_time_from_modem_startup_try(true)) {
+        return true;
+    }
+
+    if (GW_CATM1_STARTUP_SYNC_RETRY_GAP_MS != 0u) {
+        prv_delay_ms(GW_CATM1_STARTUP_SYNC_RETRY_GAP_MS);
+    }
+
+    return prv_sync_time_from_modem_startup_try(false);
 }
 
 static bool prv_sync_time_from_modem(void)
@@ -1310,6 +1339,7 @@ static void prv_finish_power_off_state(void)
     s_catm1_waiting_boot_sms_ready = false;
     s_catm1_tcp_open_fail_powerdown_pending = false;
     s_catm1_last_caopen_ms = 0u;
+    s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_last_poweroff_ms = HAL_GetTick();
 }
 
@@ -2022,6 +2052,7 @@ void GW_Catm1_Init(void)
     s_catm1_waiting_boot_sms_ready = false;
     s_catm1_tcp_open_fail_powerdown_pending = false;
     s_catm1_last_caopen_ms = 0u;
+    s_catm1_time_auto_update_attempted_this_power = false;
     prv_power_leds_blink_twice();
 }
 
@@ -2033,6 +2064,7 @@ void GW_Catm1_PowerOn(void)
     s_catm1_waiting_boot_sms_ready = true;
     s_catm1_tcp_open_fail_powerdown_pending = false;
     s_catm1_last_caopen_ms = 0u;
+    s_catm1_time_auto_update_attempted_this_power = false;
 
     if (s_catm1_last_poweroff_ms != 0u) {
         uint32_t elapsed = (uint32_t)(now - s_catm1_last_poweroff_ms);
