@@ -44,12 +44,16 @@ static volatile uint32_t s_evt_flags = 0;
 
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
+#define GW_RX_WINDOW_GUARD_MS   (300u)
 
 static bool s_test_mode = false;
 static bool s_ble_test_session_active = false;
 static uint16_t s_beacon_counter = 0;
 static uint8_t s_slot_idx = 0;
 static uint8_t s_slot_cnt = 0;
+static uint8_t s_rx_expected_nodes = 0u;
+static uint32_t s_rx_window_deadline_ms = 0u;
+static uint64_t s_rx_nodes_seen_mask = 0u;
 static uint32_t s_data_freq_hz = 0;
 static bool s_rx_cycle_minute_test = false;
 static uint32_t s_rx_cycle_stamp_sec = 0u;
@@ -88,6 +92,7 @@ static void prv_requeue_events(uint32_t ev_mask);
 static bool prv_arm_rx_slot(void);
 static void prv_rx_next_slot(void);
 static bool prv_is_two_minute_mode_active(void);
+static void prv_close_rx_cycle_and_commit(void);
 static bool prv_start_pending_beacon_burst(void);
 static void prv_cancel_pending_beacon_burst(void);
 static bool prv_get_reminder_offset_sec(uint32_t* out_offset_sec);
@@ -894,6 +899,33 @@ static void prv_schedule_after_ms(uint32_t delay_ms)
     (void)UTIL_TIMER_Start(&s_tmr_wakeup);
 }
 
+static bool prv_rx_all_expected_nodes_seen(void)
+{
+    uint64_t full_mask;
+
+    if ((s_rx_expected_nodes == 0u) || (s_rx_expected_nodes >= 64u)) {
+        return false;
+    }
+
+    full_mask = (1ULL << s_rx_expected_nodes) - 1ULL;
+    return ((s_rx_nodes_seen_mask & full_mask) == full_mask);
+}
+
+static void prv_rx_note_node_received(uint8_t node_num)
+{
+    if (node_num < 64u) {
+        s_rx_nodes_seen_mask |= (1ULL << node_num);
+    }
+}
+
+static bool prv_rx_window_expired(void)
+{
+    if (s_rx_window_deadline_ms == 0u) {
+        return true;
+    }
+    return ((int32_t)(HAL_GetTick() - s_rx_window_deadline_ms) >= 0);
+}
+
 static void prv_schedule_next_second_tick(uint64_t now_centi)
 {
     uint32_t centi = (uint32_t)(now_centi % 100u);
@@ -1025,6 +1057,9 @@ void GW_App_Process(void)
                         r->z = nd.z;
                         r->adc = nd.adc;
                         r->pulse_cnt = nd.pulse_cnt;
+                        if (nd.node_num < s_rx_expected_nodes) {
+                            prv_rx_note_node_received(nd.node_num);
+                        }
                     }
                 }
             }
@@ -1202,6 +1237,9 @@ void GW_App_Process(void)
                 s_slot_cnt = 5u;
             }
             s_slot_idx = 0;
+            s_rx_expected_nodes = s_slot_cnt;
+            s_rx_nodes_seen_mask = 0u;
+            s_rx_window_deadline_ms = HAL_GetTick() + ((uint32_t)s_slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
             if (!prv_radio_ready_for_rx()) {
                 prv_schedule_wakeup();
                 return;
@@ -1217,6 +1255,9 @@ void GW_App_Process(void)
                 UI_LPM_UnlockStop();
                 s_rx_cycle_minute_test = false;
                 s_rx_cycle_stamp_sec = 0u;
+                s_rx_window_deadline_ms = 0u;
+                s_rx_expected_nodes = 0u;
+                s_rx_nodes_seen_mask = 0u;
                 prv_schedule_wakeup();
             }
             return;
@@ -1338,6 +1379,9 @@ void GW_App_Init(void)
     s_ble_test_session_active = false;
     s_rx_cycle_minute_test = false;
     s_rx_cycle_stamp_sec = 0u;
+    s_rx_window_deadline_ms = 0u;
+    s_rx_expected_nodes = 0u;
+    s_rx_nodes_seen_mask = 0u;
     s_catm1_retry_not_before_ms = 0u;
     prv_cancel_pending_beacon_burst();
     s_beacon_recovery_mode = false;
@@ -1435,56 +1479,73 @@ void GW_Radio_OnTxTimeout(void)
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
+static void prv_close_rx_cycle_and_commit(void)
+{
+    s_state = GW_STATE_IDLE;
+    UI_LPM_UnlockStop();
+    s_rx_window_deadline_ms = 0u;
+    s_rx_expected_nodes = 0u;
+    s_rx_nodes_seen_mask = 0u;
+
+    if (s_rx_cycle_stamp_sec != 0u) {
+        s_hour_rec.epoch_sec = s_rx_cycle_stamp_sec;
+    } else {
+        s_hour_rec.epoch_sec = prv_get_current_cycle_timestamp_sec();
+    }
+    prv_mark_cycle_complete(&s_hour_rec);
+    prv_update_beacon_recovery_mode_from_rec(&s_hour_rec);
+    if (s_rx_cycle_minute_test) {
+        uint32_t now_sec = UI_Time_NowSec2016();
+        prv_handle_test50_actions_core(now_sec, true);
+        prv_send_ble_test_report_if_active(&s_hour_rec);
+        prv_request_catm1_uplink();
+        s_rx_cycle_minute_test = false;
+        s_rx_cycle_stamp_sec = 0u;
+        if (prv_run_catm1_uplink_now()) {
+            return;
+        }
+    } else {
+        bool saved_ok = prv_save_hour_rec_verified(&s_hour_rec);
+        prv_flash_tx_note_saved(saved_ok);
+        GW_Storage_PurgeOldFiles(s_hour_rec.epoch_sec);
+        prv_flash_tx_resync_after_storage_change();
+        s_rx_cycle_minute_test = false;
+        s_rx_cycle_stamp_sec = 0u;
+    }
+    prv_schedule_wakeup();
+}
+
 static void prv_rx_next_slot(void)
 {
     Radio.Sleep();
     s_slot_idx++;
-    if (s_slot_idx < s_slot_cnt) {
-        if (!prv_radio_ready_for_rx()) {
-            s_state = GW_STATE_IDLE;
-            UI_LPM_UnlockStop();
-            s_rx_cycle_minute_test = false;
-            s_rx_cycle_stamp_sec = 0u;
-            prv_schedule_wakeup();
-            return;
-        }
-        if (!prv_arm_rx_slot()) {
-            s_state = GW_STATE_IDLE;
-            UI_LPM_UnlockStop();
-            s_rx_cycle_minute_test = false;
-            s_rx_cycle_stamp_sec = 0u;
-            prv_schedule_wakeup();
-            return;
-        }
-    } else {
+
+    if (prv_rx_window_expired() || prv_rx_all_expected_nodes_seen()) {
+        prv_close_rx_cycle_and_commit();
+        return;
+    }
+
+    if (!prv_radio_ready_for_rx()) {
+        s_rx_cycle_minute_test = false;
+        s_rx_cycle_stamp_sec = 0u;
+        s_rx_window_deadline_ms = 0u;
+        s_rx_expected_nodes = 0u;
+        s_rx_nodes_seen_mask = 0u;
         s_state = GW_STATE_IDLE;
         UI_LPM_UnlockStop();
-        if (s_rx_cycle_stamp_sec != 0u) {
-            s_hour_rec.epoch_sec = s_rx_cycle_stamp_sec;
-        } else {
-            s_hour_rec.epoch_sec = prv_get_current_cycle_timestamp_sec();
-        }
-        prv_mark_cycle_complete(&s_hour_rec);
-        prv_update_beacon_recovery_mode_from_rec(&s_hour_rec);
-        if (s_rx_cycle_minute_test) {
-            uint32_t now_sec = UI_Time_NowSec2016();
-            prv_handle_test50_actions_core(now_sec, true);
-            prv_send_ble_test_report_if_active(&s_hour_rec);
-            prv_request_catm1_uplink();
-            s_rx_cycle_minute_test = false;
-            s_rx_cycle_stamp_sec = 0u;
-            if (prv_run_catm1_uplink_now()) {
-                return;
-            }
-        } else {
-            bool saved_ok = prv_save_hour_rec_verified(&s_hour_rec);
-            prv_flash_tx_note_saved(saved_ok);
-            GW_Storage_PurgeOldFiles(s_hour_rec.epoch_sec);
-            prv_flash_tx_resync_after_storage_change();
-            s_rx_cycle_minute_test = false;
-            s_rx_cycle_stamp_sec = 0u;
-        }
         prv_schedule_wakeup();
+        return;
+    }
+    if (!prv_arm_rx_slot()) {
+        s_rx_cycle_minute_test = false;
+        s_rx_cycle_stamp_sec = 0u;
+        s_rx_window_deadline_ms = 0u;
+        s_rx_expected_nodes = 0u;
+        s_rx_nodes_seen_mask = 0u;
+        s_state = GW_STATE_IDLE;
+        UI_LPM_UnlockStop();
+        prv_schedule_wakeup();
+        return;
     }
 }
 
