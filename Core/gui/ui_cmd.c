@@ -21,6 +21,8 @@ __weak void UI_Hook_OnTestStartRequested(void) {}
 /* -------------------------------------------------------------------------- */
 static bool s_cmd_silent_reply = false;
 
+static bool prv_cmd_equals_relaxed(const char* s, const char* base);
+
 static void prv_send_ok(void)
 {
     if (!s_cmd_silent_reply)
@@ -77,6 +79,170 @@ static int prv_parse_u8_dec(const char* s, uint8_t* out)
     if (v > 255u) return 0;
     *out = (uint8_t)v;
     return cnt;
+}
+
+static int prv_parse_u16_dec(const char* s, uint16_t* out)
+{
+    unsigned long v = 0u;
+    int cnt = 0;
+    while (*s && isdigit((unsigned char)*s) && cnt < 5)
+    {
+        v = (v * 10u) + (unsigned long)(*s - '0');
+        s++;
+        cnt++;
+    }
+    if (cnt == 0) return 0;
+    if (v > 65535u) return 0;
+    *out = (uint16_t)v;
+    return cnt;
+}
+
+static bool prv_match_cmd_head(const char* s, const char* head, const char** out_tail)
+{
+    const char* p = prv_skip_spaces(s);
+    const char* h = head;
+
+    if ((p == NULL) || (h == NULL))
+    {
+        return false;
+    }
+
+    while (*h != '\0')
+    {
+        if (toupper((unsigned char)*p) != toupper((unsigned char)*h))
+        {
+            return false;
+        }
+        p++;
+        h++;
+    }
+
+    while (isspace((unsigned char)*p))
+    {
+        p++;
+    }
+
+    if (*p != ':')
+    {
+        return false;
+    }
+
+    p++;
+    while (isspace((unsigned char)*p))
+    {
+        p++;
+    }
+
+    if (out_tail != NULL)
+    {
+        *out_tail = p;
+    }
+    return true;
+}
+
+static bool prv_is_plain_safe_command(const char* s)
+{
+    const char* tail = NULL;
+
+    if (prv_cmd_equals_relaxed(s, "SETTING READ"))
+    {
+        return true;
+    }
+
+    if (prv_match_cmd_head(s, "TCPIP", &tail))
+    {
+        (void)tail;
+        return true;
+    }
+
+    if (prv_match_cmd_head(s, "GW TCPIP", &tail))
+    {
+        (void)tail;
+        return true;
+    }
+
+    return false;
+}
+
+static bool prv_parse_tcpip_endpoint(const char* s, uint8_t ip[4], uint16_t* port)
+{
+    const char* p = prv_skip_spaces(s);
+    int n = 0;
+    uint16_t parsed_port = 0u;
+
+    if ((p == NULL) || (ip == NULL) || (port == NULL))
+    {
+        return false;
+    }
+
+    for (uint32_t i = 0u; i < 4u; i++)
+    {
+        n = prv_parse_u8_dec(p, &ip[i]);
+        if (n <= 0)
+        {
+            return false;
+        }
+        p += n;
+
+        while (isspace((unsigned char)*p))
+        {
+            p++;
+        }
+
+        if (i < 3u)
+        {
+            if (*p != '.')
+            {
+                return false;
+            }
+            p++;
+            while (isspace((unsigned char)*p))
+            {
+                p++;
+            }
+        }
+    }
+
+    while (isspace((unsigned char)*p))
+    {
+        p++;
+    }
+
+    if (*p != ':')
+    {
+        return false;
+    }
+    p++;
+
+    while (isspace((unsigned char)*p))
+    {
+        p++;
+    }
+
+    n = prv_parse_u16_dec(p, &parsed_port);
+    if (n <= 0)
+    {
+        return false;
+    }
+    p += n;
+
+    while (isspace((unsigned char)*p))
+    {
+        p++;
+    }
+
+    if (*p != '\0')
+    {
+        return false;
+    }
+
+    if (parsed_port < UI_TCPIP_MIN_PORT)
+    {
+        return false;
+    }
+
+    *port = parsed_port;
+    return true;
 }
 
 static bool prv_cmd_equals_relaxed(const char* s, const char* base)
@@ -157,6 +323,14 @@ static void prv_send_setting_read(void)
                    (char)cfg->setting_ascii[1],
                    (char)cfg->setting_ascii[2]);
     UI_UART_SendString(line);
+
+    (void)snprintf(line, sizeof(line), "TCPIP:%u.%u.%u.%u:%u\r\n",
+                   (unsigned)cfg->tcpip_ip[0],
+                   (unsigned)cfg->tcpip_ip[1],
+                   (unsigned)cfg->tcpip_ip[2],
+                   (unsigned)cfg->tcpip_ip[3],
+                   (unsigned)cfg->tcpip_port);
+    UI_UART_SendString(line);
 }
 
 static void prv_process_line_impl(const char* line_in, bool silent)
@@ -170,46 +344,54 @@ static void prv_process_line_impl(const char* line_in, bool silent)
     prv_rstrip(line);
 
     /*
-     * 최종 요구사항:
-     *   - UART1 명령은 반드시 "<CMD>CRLF" 형태로만 동작
-     *   - 블루투스 시작 시 튀는 데이터/쓰레기 데이터에는 아무 응답도 하지 않음
-     *
-     * 따라서 '<'로 시작하지 않으면 그냥 무시(return).
+     * 기본 정책은 기존과 동일하게 "<CMD>CRLF" 프레임만 허용한다.
+     * 다만 현장 호환을 위해 아래 두 명령은 평문도 허용한다.
+     *   - SETTING READ:
+     *   - TCPIP:xxx.xxx.xxx.xxx:yyyyy
+     * 그 외 평문/잡음은 계속 무시한다.
      */
     const char* s0 = prv_skip_spaces(line);
-    if (s0 == NULL || *s0 != '<')
-    {
-        return;
-    }
+    bool valid_plain = false;
+    char* s = NULL;
 
-    /* 끝이 '>'가 아니면 미완성/쓰레기 -> 무시 */
-    size_t n0 = strlen(s0);
-    if (n0 < 3u || s0[n0 - 1u] != '>')
+    if ((s0 != NULL) && (*s0 == '<'))
     {
-        return;
-    }
+        size_t n0 = strlen(s0);
+        if (n0 < 3u || s0[n0 - 1u] != '>')
+        {
+            return;
+        }
 
-    /* 프레임 '<', '>' 제거 */
-    char* s = (char*)prv_skip_spaces(line);
-    if (*s == '<')
-    {
+        s = (char*)prv_skip_spaces(line);
         s++;
-    }
-
-    s = (char*)prv_skip_spaces(s);
-    prv_rstrip(s);
-    size_t n = strlen(s);
-    if (n > 0u && s[n-1u] == '>')
-    {
-        s[n-1u] = '\0';
+        s = (char*)prv_skip_spaces(s);
         prv_rstrip(s);
+
+        size_t n = strlen(s);
+        if ((n > 0u) && (s[n - 1u] == '>'))
+        {
+            s[n - 1u] = '\0';
+            prv_rstrip(s);
+        }
+    }
+    else
+    {
+        if (!prv_is_plain_safe_command(s0))
+        {
+            return;
+        }
+        valid_plain = true;
+        s = (char*)s0;
     }
 
-    const char* p = s;
-    if (*p == '\0') { return; }
+    const char* p = prv_skip_spaces(s);
+    if ((p == NULL) || (*p == '\0')) { return; }
 
-    /* 요구사항: BLE active 연장은 유효한 <...> 프레임일 때만 수행 */
-    UI_BLE_ExtendMs(UI_BLE_ACTIVE_MS);
+    /* 유효한 프레임 또는 허용한 평문 명령에서만 active 연장 */
+    if (((s0 != NULL) && (*s0 == '<')) || valid_plain)
+    {
+        UI_BLE_ExtendMs(UI_BLE_ACTIVE_MS);
+    }
 
     /* -------------------- TEST START -------------------- */
     if (prv_cmd_equals_relaxed(p, "TEST START"))
@@ -349,6 +531,26 @@ static void prv_process_line_impl(const char* line_in, bool silent)
         UI_SetSetting(v, unit);
         (void)prv_commit_config_changed();
         return;
+    }
+
+    /* -------------------- TCPIP:ip:port ------------------ */
+    {
+        const char* q = NULL;
+        uint8_t ip[4] = {0u, 0u, 0u, 0u};
+        uint16_t port = 0u;
+
+        if (prv_match_cmd_head(p, "TCPIP", &q) || prv_match_cmd_head(p, "GW TCPIP", &q))
+        {
+            if (!prv_parse_tcpip_endpoint(q, ip, &port))
+            {
+                prv_send_error();
+                return;
+            }
+
+            UI_SetTcpIp(ip, port);
+            (void)prv_commit_config_changed();
+            return;
+        }
     }
 
     /* -------------------- BLE END ------------------------ */
