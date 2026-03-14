@@ -831,10 +831,15 @@ static bool prv_run_catm1_uplink_now(void)
                 prv_flash_tx_note_sent(sent_count);
                 s_catm1_retry_not_before_ms = 0u;
             } else if (!sent_ok) {
-                s_catm1_retry_not_before_ms = HAL_GetTick() + 1500u;
+                /* 서버 정지/미응답 시 현재 wakeup에서는 재시도하지 않고 종료한다.
+                 * backlog는 flash에 그대로 두고, 다음 정상 uplink 요청 때만 다시 시도한다. */
+                s_catm1_retry_not_before_ms = 0u;
             }
             prv_flash_tx_resync_after_storage_change();
             s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
+            if ((!sent_ok) && (sent_count == 0u)) {
+                s_catm1_uplink_pending = false;
+            }
             prv_schedule_wakeup();
             return true;
         }
@@ -846,8 +851,10 @@ static bool prv_run_catm1_uplink_now(void)
             s_catm1_retry_not_before_ms = 0u;
             s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
         } else {
-            s_catm1_retry_not_before_ms = HAL_GetTick() + 1500u;
-            s_catm1_uplink_pending = true;
+            /* SendSnapshot() 실패 시 rec는 flash에 남길 수 있지만,
+             * 같은 wakeup에서 CAT-M1 uplink를 연속 재시도하지 않는다. */
+            s_catm1_retry_not_before_ms = 0u;
+            s_catm1_uplink_pending = false;
         }
         prv_schedule_wakeup();
         return true;
