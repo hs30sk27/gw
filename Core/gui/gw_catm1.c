@@ -173,13 +173,16 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #define GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS (5000u)
 #endif
 #ifndef GW_CATM1_APN_BOOTSTRAP_POST_CFUN1_SIGNAL_DELAY_MS
-#define GW_CATM1_APN_BOOTSTRAP_POST_CFUN1_SIGNAL_DELAY_MS (800u)
+#define GW_CATM1_APN_BOOTSTRAP_POST_CFUN1_SIGNAL_DELAY_MS (50u)
 #endif
-#ifndef GW_CATM1_APN_BOOTSTRAP_SIGNAL_TIMEOUT_MS
-#define GW_CATM1_APN_BOOTSTRAP_SIGNAL_TIMEOUT_MS (60000u)
+#ifndef GW_CATM1_APN_BOOTSTRAP_SIGNAL_AT_TIMEOUT_MS
+#define GW_CATM1_APN_BOOTSTRAP_SIGNAL_AT_TIMEOUT_MS (500u)
+#endif
+#ifndef GW_CATM1_APN_BOOTSTRAP_SIGNAL_QUICK_TRIES
+#define GW_CATM1_APN_BOOTSTRAP_SIGNAL_QUICK_TRIES (1u)
 #endif
 #ifndef GW_CATM1_APN_BOOTSTRAP_SIGNAL_POLL_MS
-#define GW_CATM1_APN_BOOTSTRAP_SIGNAL_POLL_MS (5000u)
+#define GW_CATM1_APN_BOOTSTRAP_SIGNAL_POLL_MS (50u)
 #endif
 #ifndef GW_CATM1_APN_BOOTSTRAP_SIGNAL_MIN_RSSI
 #define GW_CATM1_APN_BOOTSTRAP_SIGNAL_MIN_RSSI (10u)
@@ -317,7 +320,7 @@ static bool prv_wait_eps_registered_poll_until(uint32_t timeout_ms, uint32_t pol
 static bool prv_wait_ps_attached(void);
 static bool prv_wait_ps_attached_until(uint32_t timeout_ms);
 static bool prv_prepare_1nce_network_bootstrap(void);
-static bool prv_wait_signal_rssi_min_until(uint8_t min_rssi, uint32_t timeout_ms, uint32_t poll_ms);
+static void prv_probe_signal_rssi_quick(uint8_t min_rssi);
 static bool prv_try_session_resync(void);
 static void prv_disable_psuttz_urc_runtime_once(void);
 
@@ -896,26 +899,27 @@ static bool prv_parse_csq_rssi(const char* rsp, uint8_t* out_rssi)
     return true;
 }
 
-static bool prv_wait_signal_rssi_min_until(uint8_t min_rssi, uint32_t timeout_ms, uint32_t poll_ms)
+static void prv_probe_signal_rssi_quick(uint8_t min_rssi)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
     uint8_t rssi = 99u;
-    uint32_t start = HAL_GetTick();
-    uint32_t gap_ms = (poll_ms == 0u) ? 1000u : poll_ms;
+    uint32_t tries = GW_CATM1_APN_BOOTSTRAP_SIGNAL_QUICK_TRIES;
 
-    while ((uint32_t)(HAL_GetTick() - start) < timeout_ms) {
+    while (tries-- > 0u) {
         rsp[0] = '\0';
-        if (prv_send_query_wait_prefix_ok("AT+CSQ\r\n", "+CSQ:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
+        if (prv_send_query_wait_prefix_ok("AT+CSQ\r\n", "+CSQ:",
+                                          GW_CATM1_APN_BOOTSTRAP_SIGNAL_AT_TIMEOUT_MS,
+                                          rsp, sizeof(rsp)) &&
             prv_parse_csq_rssi(rsp, &rssi)) {
             if ((rssi != 99u) && (rssi >= min_rssi)) {
-                return true;
+                break;
             }
-        } else {
-            (void)prv_try_session_resync();
         }
-        prv_delay_ms(gap_ms);
+
+        if (tries > 0u) {
+            prv_delay_ms(GW_CATM1_APN_BOOTSTRAP_SIGNAL_POLL_MS);
+        }
     }
-    return false;
 }
 
 static bool prv_prepare_1nce_network_bootstrap(void)
@@ -995,11 +999,8 @@ static bool prv_prepare_1nce_network_bootstrap(void)
     (void)prv_send_cmd_wait("AT+CEREG=2\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
     prv_wait_rx_quiet(100u, 300u);
 
-    if (!prv_wait_signal_rssi_min_until(GW_CATM1_APN_BOOTSTRAP_SIGNAL_MIN_RSSI,
-                                        GW_CATM1_APN_BOOTSTRAP_SIGNAL_TIMEOUT_MS,
-                                        GW_CATM1_APN_BOOTSTRAP_SIGNAL_POLL_MS)) {
-        return false;
-    }
+    /* CSQ는 진단용으로만 1회 빠르게 확인한다. 성공/실패 판단은 CEREG가 맡는다. */
+    prv_probe_signal_rssi_quick(GW_CATM1_APN_BOOTSTRAP_SIGNAL_MIN_RSSI);
 
     if (!prv_wait_eps_registered_poll_until(GW_CATM1_APN_BOOTSTRAP_REG_TIMEOUT_MS,
                                             GW_CATM1_APN_BOOTSTRAP_REG_POLL_MS)) {
