@@ -114,6 +114,9 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_TCP_POST_CLOSE_POWER_CUT_GUARD_MS
 #define GW_CATM1_TCP_POST_CLOSE_POWER_CUT_GUARD_MS (300u)
 #endif
+#ifndef GW_CATM1_TCP_CLOSE_BESTEFFORT_WAIT_MS
+#define GW_CATM1_TCP_CLOSE_BESTEFFORT_WAIT_MS (80u)
+#endif
 #ifndef GW_CATM1_POST_TIME_SYNC_POWER_CUT_GUARD_MS
 #define GW_CATM1_POST_TIME_SYNC_POWER_CUT_GUARD_MS (100u)
 #endif
@@ -1597,12 +1600,29 @@ static void prv_force_power_cut(void)
 
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz)
 {
+    (void)rsp;
+    (void)rsp_sz;
+
     if (opened) {
-        (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL,
-                                UI_CATM1_AT_TIMEOUT_MS, rsp, rsp_sz);
-        prv_delay_ms(GW_CATM1_TCP_POST_CLOSE_POWER_CUT_GUARD_MS);
+        /*
+         * 서버 전송 직후 모듈이 CARECV/CACLOSE 응답 구간에서 멈추거나
+         * 재부팅 URC를 뿜어도, 전원 cut 자체는 지연되지 않게 한다.
+         * CLOSE는 best-effort로만 내보내고 곧바로 하드 컷한다.
+         */
+        prv_uart_flush_rx();
+        (void)prv_uart_send_text("AT+CACLOSE=0\r\n", UI_CATM1_AT_TIMEOUT_MS);
+        prv_delay_ms(GW_CATM1_TCP_CLOSE_BESTEFFORT_WAIT_MS);
     }
+
     prv_force_power_cut();
+    prv_delay_ms(GW_CATM1_TCP_POST_CLOSE_POWER_CUT_GUARD_MS);
+
+#if defined(PWR_KEY_Pin)
+    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
+#endif
+#if defined(CATM1_PWR_Pin)
+    HAL_GPIO_WritePin(CATM1_PWR_GPIO_Port, CATM1_PWR_Pin, GPIO_PIN_RESET);
+#endif
 }
 
 static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
