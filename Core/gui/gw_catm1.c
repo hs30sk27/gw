@@ -306,6 +306,7 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
 static bool prv_sync_time_from_modem_quick(bool notify_hook);
 static void prv_sync_time_before_first_tcp_send(void);
 static void prv_force_power_cut(void);
+static void prv_shutdown_modem_prefer_poweroff(void);
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz);
 static void prv_note_failed_snapshot_sent(void);
 static bool prv_wait_eps_registered(void);
@@ -1749,6 +1750,18 @@ static void prv_force_power_cut(void)
     prv_finish_power_off_state();
 }
 
+static void prv_shutdown_modem_prefer_poweroff(void)
+{
+    if (prv_lpuart_is_inited() && s_catm1_session_at_ok) {
+        /* Normal session end should use the low-current shutdown path.
+         * GW_Catm1_PowerOff() also handles the fast CAOPEN-failure case internally. */
+        GW_Catm1_PowerOff();
+        return;
+    }
+
+    prv_force_power_cut();
+}
+
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz)
 {
     if (opened) {
@@ -1756,7 +1769,7 @@ static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp
                                 UI_CATM1_AT_TIMEOUT_MS, rsp, rsp_sz);
         prv_delay_ms(GW_CATM1_TCP_POST_CLOSE_POWER_CUT_GUARD_MS);
     }
-    prv_force_power_cut();
+    prv_shutdown_modem_prefer_poweroff();
 }
 
 static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
@@ -2567,6 +2580,13 @@ static void prv_prepare_low_current_before_poweroff(void)
                           GW_CATM1_POWEROFF_CFUN_TIMEOUT_MS, rsp, sizeof(rsp))) {
         prv_wait_rx_quiet(50u, GW_CATM1_POWEROFF_CFUN_SETTLE_MS);
     }
+
+    prv_uart_send_text("AT+CTZR=0\r\n", UI_CATM1_AT_SYNC_GAP_MS);
+    prv_delay_ms(UI_CATM1_AT_SYNC_GAP_MS);
+    prv_uart_send_text("AT+CTZU=1\r\n", UI_CATM1_AT_SYNC_GAP_MS);
+    prv_delay_ms(5000u);
+    prv_uart_send_text("AT&W\r\n", UI_CATM1_AT_SYNC_GAP_MS);
+    prv_delay_ms(UI_CATM1_AT_SYNC_GAP_MS);
 }
 
 void GW_Catm1_PowerOff(void)
@@ -2732,7 +2752,7 @@ retry_after_power_cycle:
 
 cleanup:
     prv_delay_ms(GW_CATM1_POST_TIME_SYNC_POWER_CUT_GUARD_MS);
-    prv_force_power_cut();
+    prv_shutdown_modem_prefer_poweroff();
     prv_lpuart_release();
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
