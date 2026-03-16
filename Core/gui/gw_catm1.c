@@ -868,15 +868,10 @@ static bool prv_send_at_sync(void)
     if (max_try == 0u) {
         max_try = GW_CATM1_AT_SYNC_MAX_TRY;
     }
-    prv_uart_send_text("AT+CTZU=1\r\n", UI_CATM1_AT_SYNC_GAP_MS);
-    prv_delay_ms(50u);
-    prv_uart_send_text("AT+CTZR=0\r\n", UI_CATM1_AT_SYNC_GAP_MS);
-    prv_delay_ms(50u);
 
     for (i = 0u; i < max_try; i++) {
         rsp[0] = '\0';
         prv_uart_flush_rx();
-
         if (!prv_uart_send_text("AT\r\n", UI_CATM1_AT_TIMEOUT_MS)) {
             prv_delay_ms(UI_CATM1_AT_SYNC_GAP_MS);
             continue;
@@ -1068,7 +1063,7 @@ static bool prv_prepare_apn_before_time_sync(void)
 
     if (did_cfun0) {
         /* Save APN/time related settings while CFUN=0. */
-//        prv_store_user_profile_cfun0();
+        prv_store_user_profile_cfun0();
         prv_wait_rx_quiet(100u, 400u);
         rsp[0] = '\0';
         if (!prv_send_cmd_wait("AT+CFUN=1\r\n", "OK", NULL, NULL,
@@ -1137,7 +1132,7 @@ static bool prv_apply_time_auto_update_cfg(bool persist_profile)
     prv_wait_rx_quiet(100u, 300u);
 
     if (persist_profile) {
-//        prv_store_user_profile_cfun0();
+        prv_store_user_profile_cfun0();
     }
     return true;
 }
@@ -2585,14 +2580,6 @@ static void prv_prepare_low_current_before_poweroff(void)
                           GW_CATM1_POWEROFF_CFUN_TIMEOUT_MS, rsp, sizeof(rsp))) {
         prv_wait_rx_quiet(50u, GW_CATM1_POWEROFF_CFUN_SETTLE_MS);
     }
-#if 0
-    prv_uart_send_text("AT+CTZR=0\r\n", UI_CATM1_AT_SYNC_GAP_MS);
-    prv_delay_ms(UI_CATM1_AT_SYNC_GAP_MS);
-    prv_uart_send_text("AT+CTZU=1\r\n", UI_CATM1_AT_SYNC_GAP_MS);
-    prv_delay_ms(5000u);
-    prv_uart_send_text("AT&W\r\n", UI_CATM1_AT_SYNC_GAP_MS);
-    prv_delay_ms(UI_CATM1_AT_SYNC_GAP_MS);
-#endif
 }
 
 void GW_Catm1_PowerOff(void)
