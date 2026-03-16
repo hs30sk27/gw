@@ -13,7 +13,7 @@
 
 typedef struct
 {
-    uint32_t file_index;
+    uint32_t file_index_0based;
     uint32_t rec_count;
     char line[192];
 } GW_FileReadCtx_t;
@@ -135,7 +135,7 @@ static bool prv_rec_cb(const GW_StorageFileInfo_t* info,
     {
         (void)snprintf(ctx->line, sizeof(ctx->line),
                        "FILE,INDEX:%lu,NAME:%s,SIZE:%lu,RECS:%u\r\n",
-                       (unsigned long)((info->list_index != 0u) ? info->list_index : (uint16_t)ctx->file_index),
+                       (unsigned long)((info->list_index != 0u) ? ((uint32_t)info->list_index - 1u) : ctx->file_index_0based),
                        info->name,
                        (unsigned long)info->size,
                        (unsigned)info->rec_count);
@@ -210,7 +210,7 @@ bool GW_FileCmd_List(void)
         prv_dt(items[i].last_epoch_sec, t1, sizeof(t1));
         (void)snprintf(line, sizeof(line),
                        "%u,NAME:%s,SIZE:%lu,RECS:%u,FROM:%s,TO:%s\r\n",
-                       (unsigned)(i + 1u),
+                       (unsigned)i,
                        items[i].name,
                        (unsigned long)items[i].size,
                        (unsigned)items[i].rec_count,
@@ -246,13 +246,18 @@ bool GW_FileCmd_ReadArg(const char* arg)
     {
         unsigned idx = 0u;
         GW_FileReadCtx_t ctx;
-        if (sscanf(a, "%u", &idx) != 1 || idx == 0u)
+        if (sscanf(a, "%u", &idx) != 1)
         {
             return false;
         }
         memset(&ctx, 0, sizeof(ctx));
-        ctx.file_index = idx;
-        if (!GW_Storage_ReadFileByIndex((uint16_t)idx, prv_rec_cb, &ctx))
+        if (idx >= 0xFFFFu)
+        {
+            return false;
+        }
+
+        ctx.file_index_0based = idx;
+        if (!GW_Storage_ReadFileByIndex((uint16_t)(idx + 1u), prv_rec_cb, &ctx))
         {
             return false;
         }
@@ -284,11 +289,16 @@ bool GW_FileCmd_DeleteArg(const char* arg)
     else
     {
         unsigned idx = 0u;
-        if (sscanf(a, "%u", &idx) != 1 || idx == 0u)
+        if (sscanf(a, "%u", &idx) != 1)
         {
             return false;
         }
-        if (!GW_Storage_DeleteFileByIndex((uint16_t)idx))
+        if (idx >= 0xFFFFu)
+        {
+            return false;
+        }
+
+        if (!GW_Storage_DeleteFileByIndex((uint16_t)(idx + 1u)))
         {
             return false;
         }

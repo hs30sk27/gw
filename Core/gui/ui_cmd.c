@@ -3,6 +3,7 @@
 #include "ui_uart.h"
 #include "ui_time.h"
 #include "ui_ble.h"
+#include "gw_file_cmd.h"
 
 #include "stm32wlxx_hal.h" /* __weak */
 #include <string.h>
@@ -156,6 +157,23 @@ static bool prv_is_plain_safe_command(const char* s)
     }
 
     if (prv_match_cmd_head(s, "GW TCPIP", &tail))
+    {
+        (void)tail;
+        return true;
+    }
+
+    if (prv_cmd_equals_relaxed(s, "FILE LIST"))
+    {
+        return true;
+    }
+
+    if (prv_match_cmd_head(s, "FILE READ", &tail))
+    {
+        (void)tail;
+        return true;
+    }
+
+    if (prv_match_cmd_head(s, "FILE DEL", &tail))
     {
         (void)tail;
         return true;
@@ -345,9 +363,12 @@ static void prv_process_line_impl(const char* line_in, bool silent)
 
     /*
      * 기본 정책은 기존과 동일하게 "<CMD>CRLF" 프레임만 허용한다.
-     * 다만 현장 호환을 위해 아래 두 명령은 평문도 허용한다.
-     *   - SETTING READ:
+     * 다만 현장 호환을 위해 아래 명령은 평문도 허용한다.
+     *   - SETTING READ
      *   - TCPIP:xxx.xxx.xxx.xxx:yyyyy
+     *   - FILE LIST
+     *   - FILE READ:ALL / FILE READ:X
+     *   - FILE DEL:ALL / FILE DEL:X
      * 그 외 평문/잡음은 계속 무시한다.
      */
     const char* s0 = prv_skip_spaces(line);
@@ -549,6 +570,56 @@ static void prv_process_line_impl(const char* line_in, bool silent)
 
             UI_SetTcpIp(ip, port);
             (void)prv_commit_config_changed();
+            return;
+        }
+    }
+
+    /* -------------------- FILE LIST ---------------------- */
+    if (prv_cmd_equals_relaxed(p, "FILE LIST"))
+    {
+        if (GW_FileCmd_List())
+        {
+            prv_send_ok();
+        }
+        else
+        {
+            prv_send_error();
+        }
+        return;
+    }
+
+    /* -------------------- FILE READ:... ------------------ */
+    {
+        const char* q = NULL;
+
+        if (prv_match_cmd_head(p, "FILE READ", &q))
+        {
+            if (GW_FileCmd_ReadArg(q))
+            {
+                prv_send_ok();
+            }
+            else
+            {
+                prv_send_error();
+            }
+            return;
+        }
+    }
+
+    /* -------------------- FILE DEL:... ------------------- */
+    {
+        const char* q = NULL;
+
+        if (prv_match_cmd_head(p, "FILE DEL", &q))
+        {
+            if (GW_FileCmd_DeleteArg(q))
+            {
+                prv_send_ok();
+            }
+            else
+            {
+                prv_send_error();
+            }
             return;
         }
     }
