@@ -2580,13 +2580,14 @@ static void prv_prepare_low_current_before_poweroff(void)
                           GW_CATM1_POWEROFF_CFUN_TIMEOUT_MS, rsp, sizeof(rsp))) {
         prv_wait_rx_quiet(50u, GW_CATM1_POWEROFF_CFUN_SETTLE_MS);
     }
-
+#if 0
     prv_uart_send_text("AT+CTZR=0\r\n", UI_CATM1_AT_SYNC_GAP_MS);
     prv_delay_ms(UI_CATM1_AT_SYNC_GAP_MS);
     prv_uart_send_text("AT+CTZU=1\r\n", UI_CATM1_AT_SYNC_GAP_MS);
     prv_delay_ms(5000u);
     prv_uart_send_text("AT&W\r\n", UI_CATM1_AT_SYNC_GAP_MS);
     prv_delay_ms(UI_CATM1_AT_SYNC_GAP_MS);
+#endif
 }
 
 void GW_Catm1_PowerOff(void)
