@@ -167,6 +167,17 @@ static bool prv_is_plain_safe_command(const char* s)
         return true;
     }
 
+    if (prv_cmd_equals_relaxed(s, "LOC"))
+    {
+        return true;
+    }
+
+    if (prv_match_cmd_head(s, "LOC", &tail))
+    {
+        (void)tail;
+        return true;
+    }
+
     if (prv_match_cmd_head(s, "FILE READ", &tail))
     {
         (void)tail;
@@ -349,6 +360,9 @@ static void prv_send_setting_read(void)
                    (unsigned)cfg->tcpip_ip[3],
                    (unsigned)cfg->tcpip_port);
     UI_UART_SendString(line);
+
+    (void)snprintf(line, sizeof(line), "LOC:%s\r\n", UI_GetLocAscii());
+    UI_UART_SendString(line);
 }
 
 static void prv_process_line_impl(const char* line_in, bool silent)
@@ -369,6 +383,7 @@ static void prv_process_line_impl(const char* line_in, bool silent)
      *   - FILE LIST
      *   - FILE READ:ALL / FILE READ:X
      *   - FILE DEL:ALL / FILE DEL:X
+     *   - LOC / LOC:
      * 그 외 평문/잡음은 계속 무시한다.
      */
     const char* s0 = prv_skip_spaces(line);
@@ -454,6 +469,42 @@ static void prv_process_line_impl(const char* line_in, bool silent)
             prv_send_error();
         }
         return;
+    }
+
+    /* -------------------- LOC / LOC:... ------------------ */
+    if (prv_cmd_equals_relaxed(p, "LOC"))
+    {
+        char line_loc[UI_LOC_ASCII_MAX + 8u];
+        (void)snprintf(line_loc, sizeof(line_loc), "LOC:%s\r\n", UI_GetLocAscii());
+        UI_UART_SendString(line_loc);
+        prv_send_ok();
+        return;
+    }
+
+    {
+        const char* q = NULL;
+
+        if (prv_match_cmd_head(p, "LOC", &q))
+        {
+            if ((q == NULL) || (*q == '\0'))
+            {
+                char line_loc[UI_LOC_ASCII_MAX + 8u];
+                (void)snprintf(line_loc, sizeof(line_loc), "LOC:%s\r\n", UI_GetLocAscii());
+                UI_UART_SendString(line_loc);
+                prv_send_ok();
+                return;
+            }
+
+            if (strlen(q) >= UI_LOC_ASCII_MAX)
+            {
+                prv_send_error();
+                return;
+            }
+
+            UI_SetLocAscii(q);
+            (void)prv_commit_config_changed();
+            return;
+        }
     }
 
     /* -------------------- NETID:XXXXXXXXXX -------------- */
