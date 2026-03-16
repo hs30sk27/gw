@@ -304,7 +304,7 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
                                                   bool abort_on_initial_invalid,
                                                   bool* out_initial_invalid_cclk);
 static bool prv_sync_time_from_modem_quick(bool notify_hook);
-static void prv_sync_time_before_first_tcp_send(void);
+static void prv_sync_time_before_tcp_send(void);
 static void prv_force_power_cut(void);
 static void prv_shutdown_modem_prefer_poweroff(void);
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz);
@@ -314,8 +314,7 @@ static bool prv_wait_eps_registered_until(uint32_t timeout_ms);
 static bool prv_wait_ps_attached(void);
 static bool prv_wait_ps_attached_until(uint32_t timeout_ms);
 static bool prv_try_session_resync(void);
-static void prv_store_user_profile_cfun0(void);
-static bool prv_apply_time_auto_update_cfg(bool persist_profile);
+static bool prv_apply_time_auto_update_cfg(void);
 static void prv_prepare_low_current_before_poweroff(void);
 
 static void prv_catm1_rb_reset(void)
@@ -1006,9 +1005,8 @@ static bool prv_start_session(bool enable_time_auto_update)
     rsp[0] = '\0';
     (void)prv_send_cmd_wait("AT+CEREG=2\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
 
-    /* 전원 인가 후에는 세션별로 CTZR/CTZU를 다시 적용해 둔다.
-     * SIM7080에서 AT&W가 ERROR일 수 있으므로, 저장 명령에 의존하지 않고
-     * 필요한 설정을 매 전원 세션에서 보장한다. */
+    /* 전원 인가 후에는 세션별로 CTZU=1만 다시 적용해 둔다.
+     * 저장 명령에는 의존하지 않고 필요한 설정을 매 전원 세션에서 보장한다. */
     if (enable_time_auto_update) {
         prv_wait_rx_quiet(100u, 400u);
         prv_enable_network_time_auto_update();
@@ -1043,8 +1041,8 @@ static bool prv_prepare_apn_before_time_sync(void)
     if (did_cfun0) {
         prv_wait_rx_quiet(100u, GW_CATM1_APN_BOOTSTRAP_CFUN_OFF_SETTLE_MS);
 
-        /* Apply CTZR=0/CTZU=1 while RF is off so the boot log contains the command. */
-        (void)prv_apply_time_auto_update_cfg(false);
+        /* Apply CTZU=1 while RF is off so the boot log contains the command. */
+        (void)prv_apply_time_auto_update_cfg();
         prv_wait_rx_quiet(100u, 400u);
     }
 
@@ -1062,9 +1060,6 @@ static bool prv_prepare_apn_before_time_sync(void)
     }
 
     if (did_cfun0) {
-        /* Save APN/time related settings while CFUN=0. */
-        prv_store_user_profile_cfun0();
-        prv_wait_rx_quiet(100u, 400u);
         rsp[0] = '\0';
         if (!prv_send_cmd_wait("AT+CFUN=1\r\n", "OK", NULL, NULL,
                                GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS, rsp, sizeof(rsp))) {
@@ -1085,7 +1080,7 @@ static bool prv_prepare_apn_before_time_sync(void)
         }
 
         /* Re-apply for the current live session after CFUN=1. */
-        (void)prv_apply_time_auto_update_cfg(false);
+        (void)prv_apply_time_auto_update_cfg();
         s_catm1_time_auto_update_attempted_this_power = true;
         prv_wait_rx_quiet(200u, 1200u);
     }
@@ -1096,44 +1091,15 @@ static bool prv_prepare_apn_before_time_sync(void)
     return true;
 }
 
-static void prv_store_user_profile_cfun0(void)
-{
-    static const char* const save_cmds[] = {
-        "AT&W\r\n",
-        "AT&W0\r\n",
-        "AT&W1\r\n",
-    };
-    char rsp[UI_CATM1_RX_BUF_SZ];
-    uint32_t i;
-
-    for (i = 0u; i < (uint32_t)(sizeof(save_cmds) / sizeof(save_cmds[0])); i++) {
-        prv_wait_rx_quiet(100u, 400u);
-        rsp[0] = '\0';
-        if (prv_send_cmd_wait(save_cmds[i], "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
-            prv_wait_rx_quiet(100u, GW_CATM1_PROFILE_SAVE_SETTLE_MS);
-            return;
-        }
-        (void)prv_try_session_resync();
-    }
-}
-
-static bool prv_apply_time_auto_update_cfg(bool persist_profile)
+static bool prv_apply_time_auto_update_cfg(void)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
-
-    rsp[0] = '\0';
-    (void)prv_send_cmd_wait("AT+CTZR=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
-    prv_wait_rx_quiet(100u, 300u);
 
     rsp[0] = '\0';
     if (!prv_send_cmd_wait("AT+CTZU=1\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
         return false;
     }
     prv_wait_rx_quiet(100u, 300u);
-
-    if (persist_profile) {
-        prv_store_user_profile_cfun0();
-    }
     return true;
 }
 
@@ -1144,7 +1110,7 @@ static void prv_enable_network_time_auto_update(void)
     }
 
     /* Apply once immediately after boot. */
-    if (!prv_apply_time_auto_update_cfg(false)) {
+    if (!prv_apply_time_auto_update_cfg()) {
         return;
     }
 
@@ -1434,20 +1400,20 @@ static bool prv_sync_time_from_modem_quick(bool notify_hook)
     return true;
 }
 
-static void prv_sync_time_before_first_tcp_send(void)
+static void prv_sync_time_before_tcp_send(void)
 {
     uint32_t try_idx;
+    uint32_t max_try = 1u;
 
-    if (!s_catm1_tcp_time_sync_pending) {
-        return;
+    if (s_catm1_tcp_time_sync_pending) {
+        max_try = GW_CATM1_SERVER_CCLK_SYNC_RETRY;
     }
 
-    for (try_idx = 0u; try_idx < GW_CATM1_SERVER_CCLK_SYNC_RETRY; try_idx++) {
+    for (try_idx = 0u; try_idx < max_try; try_idx++) {
         if (prv_sync_time_from_modem_quick(true)) {
-            s_catm1_tcp_time_sync_pending = false;
-            return;
+            break;
         }
-        if ((try_idx + 1u) < GW_CATM1_SERVER_CCLK_SYNC_RETRY) {
+        if ((try_idx + 1u) < max_try) {
             prv_wait_rx_quiet(50u, 300u);
             prv_delay_ms(GW_CATM1_SERVER_CCLK_SYNC_GAP_MS);
         }
@@ -2224,7 +2190,7 @@ static bool prv_send_tcp_payload(const char* payload)
         return false;
     }
 
-    prv_sync_time_before_first_tcp_send();
+    prv_sync_time_before_tcp_send();
 
     have_base = prv_query_caack(&base_total, &base_unack);
     if (!have_base) {
