@@ -35,6 +35,7 @@ static uint8_t s_time_sync_delta_count = 0u;
 static bool s_catm1_time_auto_update_attempted_this_power = false;
 static bool s_catm1_startup_apn_configured_this_power = false;
 static bool s_catm1_tcp_time_sync_pending = false;
+static volatile bool s_catm1_server_cmd_ind_seen = false;
 
 static bool s_failed_snapshot_queued_valid = false;
 static uint32_t s_failed_snapshot_queued_epoch_sec = 0u;
@@ -1040,10 +1041,6 @@ static bool prv_prepare_apn_before_time_sync(void)
                                   GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS, rsp, sizeof(rsp));
     if (did_cfun0) {
         prv_wait_rx_quiet(100u, GW_CATM1_APN_BOOTSTRAP_CFUN_OFF_SETTLE_MS);
-
-        /* Apply CTZU=1 while RF is off so the boot log contains the command. */
-        (void)prv_apply_time_auto_update_cfg();
-        prv_wait_rx_quiet(100u, 400u);
     }
 
     (void)snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"\r\n", UI_CATM1_1NCE_APN);
@@ -1079,9 +1076,6 @@ static bool prv_prepare_apn_before_time_sync(void)
             return false;
         }
 
-        /* Re-apply for the current live session after CFUN=1. */
-        (void)prv_apply_time_auto_update_cfg();
-        s_catm1_time_auto_update_attempted_this_power = true;
         prv_wait_rx_quiet(200u, 1200u);
     }
 
@@ -1697,6 +1691,7 @@ static void prv_finish_power_off_state(void)
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_tcp_time_sync_pending = false;
+    s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
     s_catm1_last_poweroff_ms = HAL_GetTick();
 }
@@ -1817,61 +1812,14 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
     return false;
 }
 
-static bool prv_query_caack(uint32_t* out_total, uint32_t* out_unack)
+static void prv_wait_post_send_settle(void)
 {
-    char rsp[UI_CATM1_RX_BUF_SZ];
-    unsigned a = 0u;
-    unsigned b = 0u;
-    uint32_t total = 0u;
-    uint32_t unack = 0u;
-
-    if (out_total != NULL) {
-        *out_total = 0u;
-    }
-    if (out_unack != NULL) {
-        *out_unack = 0u;
-    }
-
-    if (!prv_send_query_wait_prefix_ok("AT+CAACK=0\r\n", "+CAACK:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
-        return false;
-    }
-    if (sscanf(rsp, "%*[^:]: %u,%u", &a, &b) != 2) {
-        return false;
-    }
-    if (b > a) {
-        total = (uint32_t)b;
-        unack = (uint32_t)a;
-    } else {
-        total = (uint32_t)a;
-        unack = (uint32_t)b;
-    }
-    if (out_total != NULL) {
-        *out_total = total;
-    }
-    if (out_unack != NULL) {
-        *out_unack = unack;
-    }
-    return true;
+    /* Do not transmit AT+CAACK queries here.
+     * The query path flushes RX and can discard immediate server indications or
+     * command/time payloads that arrive right after CASEND. Preserve RX for
+     * prv_receive_server_cmd_after_first_payload(). */
+    prv_delay_ms(30u);
 }
-
-static bool prv_wait_caack_drained(uint32_t base_total, uint32_t add_len)
-{
-    uint32_t start = HAL_GetTick();
-    uint32_t need_total = base_total + add_len;
-
-    while ((uint32_t)(HAL_GetTick() - start) < UI_CATM1_ACK_WAIT_MS) {
-        uint32_t total = 0u;
-        uint32_t unack = 0u;
-        if (prv_query_caack(&total, &unack)) {
-            if ((total >= need_total) && (unack == 0u)) {
-                return true;
-            }
-        }
-        prv_delay_ms(200u);
-    }
-    return false;
-}
-
 
 static bool prv_wait_server_cmd_ind(uint32_t timeout_ms)
 {
@@ -2151,7 +2099,11 @@ static void prv_receive_server_cmd_after_first_payload(void)
     uint32_t pass;
     bool saw_ind;
 
-    saw_ind = prv_wait_server_cmd_ind(GW_CATM1_SERVER_CMD_WAIT_MS);
+    saw_ind = s_catm1_server_cmd_ind_seen;
+    s_catm1_server_cmd_ind_seen = false;
+    if (!saw_ind) {
+        saw_ind = prv_wait_server_cmd_ind(GW_CATM1_SERVER_CMD_WAIT_MS);
+    }
     for (pass = 0u; pass < GW_CATM1_SERVER_CMD_MAX_READ_PASSES; pass++) {
         if (!prv_read_server_cmd_data(data, sizeof(data), &data_len)) {
             if (!saw_ind || (pass > 0u)) {
@@ -2175,9 +2127,6 @@ static bool prv_send_tcp_payload(const char* payload)
     char cmd[48];
     char rsp[UI_CATM1_RX_BUF_SZ];
     size_t len;
-    uint32_t base_total = 0u;
-    uint32_t base_unack = 0u;
-    bool have_base;
 
     if (payload == NULL) {
         return false;
@@ -2192,12 +2141,6 @@ static bool prv_send_tcp_payload(const char* payload)
 
     prv_sync_time_before_tcp_send();
 
-    have_base = prv_query_caack(&base_total, &base_unack);
-    if (!have_base) {
-        base_total = 0u;
-        base_unack = 0u;
-    }
-
     (void)snprintf(cmd, sizeof(cmd), "AT+CASEND=0,%u,%u\r\n", (unsigned)len, (unsigned)UI_CATM1_SEND_INPUT_TIMEOUT_MS);
     if (!prv_send_cmd_wait(cmd, ">", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
         return false;
@@ -2208,7 +2151,13 @@ static bool prv_send_tcp_payload(const char* payload)
     if (!prv_uart_wait_for(rsp, sizeof(rsp), UI_CATM1_SEND_INPUT_TIMEOUT_MS + 3000u, "OK", NULL, NULL)) {
         return false;
     }
-    return prv_wait_caack_drained(base_total, (uint32_t)len);
+    if ((strstr(rsp, "+CADATAIND: 0") != NULL) ||
+        (strstr(rsp, "+CAURC: \"recv\",0,") != NULL)) {
+        s_catm1_server_cmd_ind_seen = true;
+    }
+
+    prv_wait_post_send_settle();
+    return true;
 }
 
 static bool prv_node_valid(const GW_NodeRec_t* r)
@@ -2498,6 +2447,7 @@ void GW_Catm1_Init(void)
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_tcp_time_sync_pending = false;
+    s_catm1_server_cmd_ind_seen = false;
     prv_power_leds_blink_twice();
 }
 
@@ -2511,6 +2461,7 @@ void GW_Catm1_PowerOn(void)
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_tcp_time_sync_pending = false;
+    s_catm1_server_cmd_ind_seen = false;
 
     if (s_catm1_last_poweroff_ms != 0u) {
         uint32_t elapsed = (uint32_t)(now - s_catm1_last_poweroff_ms);
@@ -2676,7 +2627,7 @@ bool GW_Catm1_SyncTimeOnce(void)
     }
 
 retry_after_power_cycle:
-    if (!prv_start_session(true)) {
+    if (!prv_start_session(false)) {
         if (!retried) {
             retried = true;
             prv_force_power_cut();
@@ -2694,6 +2645,8 @@ retry_after_power_cycle:
         goto cleanup;
     }
 
+    prv_enable_network_time_auto_update();
+    time_auto_update_used = s_catm1_time_auto_update_attempted_this_power;
     if (time_auto_update_used) {
         s_catm1_time_auto_update_attempted_this_power = true;
     }
