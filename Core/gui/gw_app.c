@@ -82,6 +82,10 @@ static uint32_t s_beacon_burst_gap_ms = 0u;
 #define GW_BEACON_REMINDER_BURST_COUNT (2u)
 #define GW_BEACON_REMINDER_GAP_MS      (200u)
 
+#ifndef GW_CATM1_RETRY_DELAY_MS
+#define GW_CATM1_RETRY_DELAY_MS        (60000u)
+#endif
+
 static uint8_t s_beacon_tx_payload[UI_BEACON_PAYLOAD_LEN];
 static uint8_t s_rx_shadow[UI_NODE_PAYLOAD_LEN];
 static uint16_t s_rx_shadow_size = 0u;
@@ -835,16 +839,15 @@ static bool prv_run_catm1_uplink_now(void)
             sent_ok = GW_Catm1_SendStoredRange(s_flash_tx_next_send_index, batch_count, &sent_count);
             if (sent_count > 0u) {
                 prv_flash_tx_note_sent(sent_count);
-                s_catm1_retry_not_before_ms = 0u;
-            } else if (!sent_ok) {
-                /* 서버 정지/미응답 시 현재 wakeup에서는 재시도하지 않고 종료한다.
-                 * backlog는 flash에 그대로 두고, 다음 정상 uplink 요청 때만 다시 시도한다. */
-                s_catm1_retry_not_before_ms = 0u;
             }
             prv_flash_tx_resync_after_storage_change();
             s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
-            if ((!sent_ok) && (sent_count == 0u)) {
-                s_catm1_uplink_pending = false;
+            if ((!sent_ok) && (sent_count == 0u) && s_catm1_uplink_pending) {
+                /* backlog는 flash에 남겨 두고, 짧은 backoff 뒤 자동 재시도한다.
+                 * pending을 여기서 내리면 이미 받은 데이터가 서버 uplink 없이 멈출 수 있다. */
+                s_catm1_retry_not_before_ms = now_ms + GW_CATM1_RETRY_DELAY_MS;
+            } else {
+                s_catm1_retry_not_before_ms = 0u;
             }
             prv_schedule_wakeup();
             return true;
@@ -853,14 +856,13 @@ static bool prv_run_catm1_uplink_now(void)
 
     if (rec != NULL) {
         bool sent_ok = GW_Catm1_SendSnapshot(rec);
-        if (sent_ok) {
-            s_catm1_retry_not_before_ms = 0u;
-            s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
+        s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
+        if ((!sent_ok) && s_catm1_uplink_pending) {
+            /* live snapshot이 flash backlog로 넘어간 경우에는 pending을 유지해야
+             * 다음 wakeup에서 서버 uplink가 다시 이어진다. */
+            s_catm1_retry_not_before_ms = now_ms + GW_CATM1_RETRY_DELAY_MS;
         } else {
-            /* SendSnapshot() 실패 시 rec는 flash에 남길 수 있지만,
-             * 같은 wakeup에서 CAT-M1 uplink를 연속 재시도하지 않는다. */
             s_catm1_retry_not_before_ms = 0u;
-            s_catm1_uplink_pending = false;
         }
         prv_schedule_wakeup();
         return true;

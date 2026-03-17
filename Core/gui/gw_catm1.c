@@ -2617,6 +2617,13 @@ void GW_Catm1_Init(void)
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
     s_catm1_bandcfg_applied_this_power = false;
+#if defined(PWR_KEY_Pin)
+    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
+#endif
+#if defined(CATM1_PWR_Pin)
+    HAL_GPIO_WritePin(CATM1_PWR_GPIO_Port, CATM1_PWR_Pin, GPIO_PIN_RESET);
+#endif
+    s_catm1_last_poweroff_ms = HAL_GetTick();
     prv_power_leds_blink_twice();
 }
 
@@ -2950,21 +2957,25 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
     if (rec == NULL) {
         return false;
     }
+
+    live_rec = *rec;
+    should_store_on_fail = true;
+
     if (prv_tcp_blocked_by_ble()) {
+        (void)prv_store_failed_snapshot_to_flash(&live_rec);
         return false;
     }
 
-    live_rec = *rec;
     len = prv_build_snapshot_payload(&live_rec, payload, sizeof(payload));
     if (len == 0u) {
         return false;
     }
 
     if (prv_tcp_blocked_by_ble()) {
+        (void)prv_store_failed_snapshot_to_flash(&live_rec);
         return false;
     }
 
-    should_store_on_fail = true;
     prv_get_server(ip, &port);
     UI_LPM_LockStop();
     GW_Catm1_SetBusy(true);
