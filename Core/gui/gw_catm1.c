@@ -250,7 +250,7 @@ static const char* prv_gw_voltage_text(uint8_t gw_volt_x10)
     if (gw_volt_x10 == 0xFFu) {
         return "-";
     }
-    return (gw_volt_x10 >= UI_NODE_BATT_LOW_THRESHOLD_X10) ? "3.4" : "LOW";
+    return (gw_volt_x10 >= UI_NODE_BATT_LOW_THRESHOLD_X10) ? "3.5" : "LOW";
 }
 
 static const char* prv_node_voltage_text(uint8_t batt_lvl)
@@ -258,7 +258,7 @@ static const char* prv_node_voltage_text(uint8_t batt_lvl)
     if (batt_lvl == UI_NODE_BATT_LVL_INVALID) {
         return "-";
     }
-    return (batt_lvl == UI_NODE_BATT_LVL_NORMAL) ? "3.4" : "LOW";
+    return (batt_lvl == UI_NODE_BATT_LVL_NORMAL) ? "3.5" : "LOW";
 }
 
 static bool prv_is_leap_year(uint16_t year)
