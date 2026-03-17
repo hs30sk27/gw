@@ -61,6 +61,8 @@ extern SPI_HandleTypeDef hspi1;
 
 static bool s_inited = false;
 
+
+
 static void prv_cs_high(void)
 {
 #if (GW_W25_HAVE_CS == 1u)
@@ -359,3 +361,4 @@ int GW_Storage_W25Q_Sync(void)
 {
     return prv_wait_ready(GW_W25_WAIT_SE_MS) ? 0 : -1;
 }
+

@@ -7,6 +7,7 @@
 #include "ui_uart.h"
 #include "ui_ble.h"
 #include "ui_time.h"
+#include "ui_radio.h"
 
 #include "stm32_lpm.h"
 #include "utilities_def.h" /* CFG_LPM_APPLI_Id */
@@ -26,6 +27,7 @@
 #if defined(HAL_ADC_MODULE_ENABLED)
 #include "stm32wlxx_hal_adc.h"
 #endif
+#include "ui_radio.h"
 
 /* 주변장치 핸들(프로젝트 main.c에 존재) */
 extern SPI_HandleTypeDef  hspi1;
@@ -36,6 +38,7 @@ extern ADC_HandleTypeDef  hadc;
 #if defined(DMA1_Channel2)
 extern DMA_HandleTypeDef  hdma_usart1_tx;
 #endif
+extern void UI_Radio_EnterSleep(void);
 
 static void prv_disable_spi_clock(const SPI_HandleTypeDef *hspi)
 {
@@ -157,11 +160,14 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
      * 요구사항: stop 들어가기 전에 spi, uart1, lpuart1, adc deinit
      *
      * NOTE
-     *  - Radio(SubGHz)는 별도 파워/상태 관리가 필요할 수 있어 여기서는 건드리지 않습니다.
-     *    (LoRa 동작 종료 시점에 Radio.Sleep()을 호출하는 방식으로 전류를 줄이세요.)
+     *  - RF 작업 종료 직후에는 GW 이벤트 경로에서 Radio.Sleep()으로 내리고,
+     *    stop 직전에도 한 번 더 내려서 SubGHz가 깨어 남지 않도록 한다.
      */
     /* Reset 대비: Stop 진입 직전에 현재 시간을 Backup Register에 저장 */
     UI_Time_SaveToBackupNow();
+
+    /* RF가 마지막 상태에 남아 있지 않도록 stop 직전 강제 sleep */
+    UI_Radio_EnterSleep();
 
     /* SW 상태 정리: 다음 wake-up 이후 재진입 시 꼬임 방지 */
     UI_Core_ClearFlagsBeforeStop();

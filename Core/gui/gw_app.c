@@ -1064,7 +1064,7 @@ void GW_App_Process(void)
 
     if ((ev & GW_EVT_RADIO_TX_DONE) != 0u) {
         if (s_state == GW_STATE_BEACON_TX) {
-            Radio.Sleep();
+            UI_Radio_EnterSleep();
             s_state = GW_STATE_IDLE;
             UI_LPM_UnlockStop();
             s_beacon_counter++;
@@ -1082,7 +1082,7 @@ void GW_App_Process(void)
 
     if ((ev & GW_EVT_RADIO_TX_TIMEOUT) != 0u) {
         UI_Radio_MarkRecoverNeeded();
-        Radio.Sleep();
+        UI_Radio_EnterSleep();
         if (s_state != GW_STATE_IDLE) {
             s_state = GW_STATE_IDLE;
             UI_LPM_UnlockStop();
@@ -1127,7 +1127,7 @@ void GW_App_Process(void)
             prv_rx_next_slot();
         } else {
             UI_Radio_MarkRecoverNeeded();
-            Radio.Sleep();
+            UI_Radio_EnterSleep();
             if (s_state != GW_STATE_IDLE) {
                 s_state = GW_STATE_IDLE;
                 UI_LPM_UnlockStop();
@@ -1143,7 +1143,7 @@ void GW_App_Process(void)
             prv_rx_next_slot();
         } else {
             UI_Radio_MarkRecoverNeeded();
-            Radio.Sleep();
+            UI_Radio_EnterSleep();
             if (s_state != GW_STATE_IDLE) {
                 s_state = GW_STATE_IDLE;
                 UI_LPM_UnlockStop();
@@ -1550,6 +1550,7 @@ void GW_Radio_OnTxTimeout(void)
 
 static void prv_close_rx_cycle_and_commit(void)
 {
+    UI_Radio_EnterSleep();
     s_state = GW_STATE_IDLE;
     UI_LPM_UnlockStop();
     s_rx_window_deadline_ms = 0u;
@@ -1589,7 +1590,7 @@ static void prv_close_rx_cycle_and_commit(void)
 
 static void prv_rx_next_slot(void)
 {
-    Radio.Sleep();
+    UI_Radio_EnterSleep();
     s_slot_idx++;
 
     if (prv_rx_window_expired() ||

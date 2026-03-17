@@ -491,7 +491,7 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin : W25Q128_CS_Pin */
   GPIO_InitStruct.Pin = W25Q128_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(W25Q128_CS_GPIO_Port, &GPIO_InitStruct);
 
@@ -519,7 +519,7 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin : BATT_LVL_Pin */
   GPIO_InitStruct.Pin = BATT_LVL_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(BATT_LVL_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PH3 */

@@ -136,3 +136,10 @@ void UI_Radio_ClearRecoverNeeded(void)
 {
     s_recover_needed = false;
 }
+
+void UI_Radio_EnterSleep(void)
+{
+/*    if (Radio.Sleep != NULL) */{
+        Radio.Sleep();
+    }
+}

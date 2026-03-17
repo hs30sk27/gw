@@ -12,6 +12,7 @@ bool UI_Radio_PrepareTx(uint8_t payload_len);
 bool UI_Radio_PrepareRx(uint8_t payload_len);
 void UI_Radio_MarkRecoverNeeded(void);
 void UI_Radio_ClearRecoverNeeded(void);
+void UI_Radio_EnterSleep(void);
 
 #ifdef __cplusplus
 }
