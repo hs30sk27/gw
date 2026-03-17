@@ -34,6 +34,7 @@ static uint8_t s_time_sync_delta_wr = 0u;
 static uint8_t s_time_sync_delta_count = 0u;
 static bool s_catm1_time_auto_update_attempted_this_power = false;
 static bool s_catm1_startup_apn_configured_this_power = false;
+static bool s_catm1_bandcfg_applied_this_power = false;
 static bool s_catm1_tcp_time_sync_pending = false;
 static volatile bool s_catm1_server_cmd_ind_seen = false;
 
@@ -169,6 +170,12 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #endif
 #ifndef GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS
 #define GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS (5000u)
+#endif
+#ifndef GW_CATM1_BANDCFG_TIMEOUT_MS
+#define GW_CATM1_BANDCFG_TIMEOUT_MS (10000u)
+#endif
+#ifndef GW_CATM1_CATM_BAND_CFG_CMD
+#define GW_CATM1_CATM_BAND_CFG_CMD "AT+CBANDCFG=\"CAT-M\",1,3,5,8\r\n"
 #endif
 #ifndef GW_CATM1_COPS_AUTO_TIMEOUT_MS
 #define GW_CATM1_COPS_AUTO_TIMEOUT_MS (30000u)
@@ -321,6 +328,7 @@ static void prv_format_epoch2016(uint32_t epoch_sec, char* out, size_t out_sz)
 
 static bool prv_activate_pdp(void);
 static bool prv_prepare_apn_before_time_sync(void);
+static void prv_try_apply_korea_catm_bands(void);
 static void prv_enable_network_time_auto_update(void);
 static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup,
                                                   bool abort_on_initial_invalid,
@@ -338,6 +346,8 @@ static bool prv_wait_ps_attached_until(uint32_t timeout_ms);
 static bool prv_try_session_resync(void);
 static void prv_try_restore_legacy_attach_profile(void);
 static bool prv_apply_time_auto_update_cfg(void);
+static bool prv_request_auto_operator_select(bool force_send);
+static bool prv_is_eps_registered_stat(uint8_t stat);
 static void prv_prepare_low_current_before_poweroff(void);
 
 static void prv_catm1_rb_reset(void)
@@ -1063,6 +1073,23 @@ static bool prv_start_session(bool enable_time_auto_update)
     return true;
 }
 
+static void prv_try_apply_korea_catm_bands(void)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+
+    if (s_catm1_bandcfg_applied_this_power) {
+        return;
+    }
+
+    rsp[0] = '\0';
+    if (prv_send_cmd_wait(GW_CATM1_CATM_BAND_CFG_CMD, "OK", NULL, NULL,
+                          GW_CATM1_BANDCFG_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        s_catm1_bandcfg_applied_this_power = true;
+        prv_wait_rx_quiet(100u, 300u);
+    }
+}
+
+
 static bool prv_prepare_apn_before_time_sync(void)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
@@ -1081,6 +1108,9 @@ static bool prv_prepare_apn_before_time_sync(void)
     if (did_cfun0) {
         prv_wait_rx_quiet(100u, GW_CATM1_APN_BOOTSTRAP_CFUN_OFF_SETTLE_MS);
     }
+
+    /* CFUN=0 상태에서 Cat-M band mask를 먼저 적용한 뒤 APN/PDP를 정리한다. */
+    prv_try_apply_korea_catm_bands();
 
     /* Keep bootstrap aligned with the older working sequence:
      * CFUN=0 -> APN/PDP config -> CFUN=1.
@@ -1122,6 +1152,9 @@ static bool prv_prepare_apn_before_time_sync(void)
         }
 
         prv_wait_rx_quiet(200u, 1200u);
+
+        /* CFUN=1 복귀 직후에는 자동 사업자 선택을 다시 걸어 망 탐색을 정상 경로로 시작시킨다. */
+        (void)prv_request_auto_operator_select(true);
     }
 
     rsp[0] = '\0';
@@ -1136,12 +1169,18 @@ static void prv_try_restore_legacy_attach_profile(void)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
 
+    /* 국내 주요 Cat-M 밴드(1/3/5/8)를 먼저 제한해 불필요한 band scan을 줄인다. */
+    prv_try_apply_korea_catm_bands();
+
     rsp[0] = '\0';
-    /* 이전 정상 로그에 있던 CMNB=1만 best-effort로 복구한다.
-     * COPS=0 / CGATT=1 강제 경로는 등록 상태를 더 흔들어 제외한다. */
+    /* 이전 정상 로그에 있던 CMNB=1은 best-effort로 복구한다. */
     (void)prv_send_cmd_wait("AT+CMNB=1\r\n", "OK", NULL, NULL,
                             UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
     prv_wait_rx_quiet(100u, 300u);
+
+    /* 자동 사업자 선택은 빠져 있으면 attach가 지연될 수 있다.
+     * 다만 이미 등록된 상태에서는 재선택으로 흔들리지 않게 CEREG 상태를 보고 필요할 때만 보낸다. */
+    (void)prv_request_auto_operator_select(false);
 }
 
 static bool prv_apply_time_auto_update_cfg(void)
@@ -1535,6 +1574,37 @@ static bool prv_parse_cereg_stat(const char* rsp, uint8_t* stat)
     return true;
 }
 
+static bool prv_is_eps_registered_stat(uint8_t stat)
+{
+    return ((stat == 1u) || (stat == 5u) || (stat == 9u) || (stat == 10u));
+}
+
+static bool prv_request_auto_operator_select(bool force_send)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+    uint8_t stat = 0u;
+
+    if (!force_send) {
+        rsp[0] = '\0';
+        if (prv_send_query_wait_prefix_ok("AT+CEREG?\r\n", "+CEREG:",
+                                          UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
+            prv_parse_cereg_stat(rsp, &stat) &&
+            prv_is_eps_registered_stat(stat)) {
+            return true;
+        }
+    }
+
+    prv_wait_rx_quiet(100u, 400u);
+    rsp[0] = '\0';
+    if (!prv_send_cmd_wait("AT+COPS=0\r\n", "OK", NULL, NULL,
+                           GW_CATM1_COPS_AUTO_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+
+    prv_wait_rx_quiet(100u, GW_CATM1_COPS_AUTO_SETTLE_MS);
+    return true;
+}
+
 static bool prv_wait_eps_registered(void)
 {
     return prv_wait_eps_registered_until(UI_CATM1_NET_REG_TIMEOUT_MS);
@@ -1548,6 +1618,7 @@ static bool prv_wait_eps_registered_until(uint32_t timeout_ms)
     uint32_t effective_timeout_ms = timeout_ms;
     uint32_t poll_count = 0u;
     uint8_t query_fail_streak = 0u;
+    bool reselect_sent = false;
 
     if (effective_timeout_ms < GW_CATM1_NET_REG_MIN_TIMEOUT_MS) {
         effective_timeout_ms = GW_CATM1_NET_REG_MIN_TIMEOUT_MS;
@@ -1560,8 +1631,13 @@ static bool prv_wait_eps_registered_until(uint32_t timeout_ms)
         if (prv_send_query_wait_prefix_ok("AT+CEREG?\r\n", "+CEREG:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
             prv_parse_cereg_stat(rsp, &stat)) {
             query_fail_streak = 0u;
-            if ((stat == 1u) || (stat == 5u) || (stat == 9u) || (stat == 10u)) {
+            if (prv_is_eps_registered_stat(stat)) {
                 return true;
+            }
+
+            if ((!reselect_sent) && (poll_count >= GW_CATM1_CEREG_RESELECT_POLL)) {
+                (void)prv_request_auto_operator_select(true);
+                reselect_sent = true;
             }
         } else {
             query_fail_streak++;
@@ -1754,6 +1830,7 @@ static void prv_finish_power_off_state(void)
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
+    s_catm1_bandcfg_applied_this_power = false;
     s_catm1_last_poweroff_ms = HAL_GetTick();
 }
 
@@ -2510,6 +2587,7 @@ void GW_Catm1_Init(void)
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
+    s_catm1_bandcfg_applied_this_power = false;
     prv_power_leds_blink_twice();
 }
 
@@ -2525,6 +2603,7 @@ void GW_Catm1_PowerOn(void)
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
+    s_catm1_bandcfg_applied_this_power = false;
 
     if (s_catm1_last_poweroff_ms != 0u) {
         uint32_t elapsed = (uint32_t)(now - s_catm1_last_poweroff_ms);
