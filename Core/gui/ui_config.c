@@ -60,7 +60,8 @@ static void prv_init_defaults(void)
 {
     memset(&s_cfg, 0, sizeof(s_cfg));
 
-    memcpy(s_cfg.net_id, "ABCD123456", UI_NET_ID_LEN);
+    memset(s_cfg.net_id, 0, sizeof(s_cfg.net_id));
+    memcpy(s_cfg.net_id, "ABCD123456", sizeof("ABCD123456") - 1u);
 
     s_cfg.gw_num    = 0u;
     s_cfg.max_nodes = UI_MAX_NODES;
@@ -282,6 +283,7 @@ bool UI_Config_Save(void)
 
 void UI_SetNetId(const uint8_t net_id_10[UI_NET_ID_LEN])
 {
+    memset(s_cfg.net_id, 0, sizeof(s_cfg.net_id));
     memcpy(s_cfg.net_id, net_id_10, UI_NET_ID_LEN);
 }
 

@@ -155,6 +155,9 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_QUERY_FAIL_RESYNC_STREAK
 #define GW_CATM1_QUERY_FAIL_RESYNC_STREAK (3u)
 #endif
+#ifndef GW_CATM1_CEREG_MAX_POLLS
+#define GW_CATM1_CEREG_MAX_POLLS (10u)
+#endif
 #ifndef GW_CATM1_POST_CPIN_NETWORK_SETTLE_MS
 #define GW_CATM1_POST_CPIN_NETWORK_SETTLE_MS (1500u)
 #endif
@@ -166,6 +169,24 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #endif
 #ifndef GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS
 #define GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS (5000u)
+#endif
+#ifndef GW_CATM1_COPS_AUTO_TIMEOUT_MS
+#define GW_CATM1_COPS_AUTO_TIMEOUT_MS (30000u)
+#endif
+#ifndef GW_CATM1_COPS_AUTO_SETTLE_MS
+#define GW_CATM1_COPS_AUTO_SETTLE_MS (1500u)
+#endif
+#ifndef GW_CATM1_CEREG_RESELECT_POLL
+#define GW_CATM1_CEREG_RESELECT_POLL (4u)
+#endif
+#ifndef GW_CATM1_CEREG_POLL_GAP_MS
+#define GW_CATM1_CEREG_POLL_GAP_MS (5000u)
+#endif
+#ifndef GW_CATM1_CGATT_ATTACH_TIMEOUT_MS
+#define GW_CATM1_CGATT_ATTACH_TIMEOUT_MS (75000u)
+#endif
+#ifndef GW_CATM1_CGATT_ATTACH_SETTLE_MS
+#define GW_CATM1_CGATT_ATTACH_SETTLE_MS (1200u)
 #endif
 #ifndef GW_CATM1_SERVER_CCLK_TIMEOUT_MS
 #define GW_CATM1_SERVER_CCLK_TIMEOUT_MS (1500u)
@@ -315,6 +336,7 @@ static bool prv_wait_eps_registered_until(uint32_t timeout_ms);
 static bool prv_wait_ps_attached(void);
 static bool prv_wait_ps_attached_until(uint32_t timeout_ms);
 static bool prv_try_session_resync(void);
+static void prv_try_restore_legacy_attach_profile(void);
 static bool prv_apply_time_auto_update_cfg(void);
 static void prv_prepare_low_current_before_poweroff(void);
 
@@ -374,16 +396,30 @@ static bool prv_parse_psuttz_epoch(const char* line, uint64_t* out_epoch_centi)
         return false;
     }
     p += 8;
-    while ((*p == ' ') || (*p == '\t')) {
+    while ((*p == ' ') || (*p == '	')) {
         p++;
     }
 
-    n = sscanf(p, "%d,%d,%d,%d,%d,%d,\"%7[^\"]\",%d",
+    /* SIM7080 commonly reports *PSUTTZ as yy/MM/dd,hh:mm:ss,"+zz",dst,
+     * while older docs also show comma-only fields. Accept both forms. */
+    n = sscanf(p, "%d/%d/%d,%d:%d:%d,\"%7[^\"]\",%d",
                &year, &mon, &day, &hh, &mm, &ss, tz_str, &dst);
+    if (n < 7) {
+        n = sscanf(p, "%d,%d,%d,%d,%d,%d,\"%7[^\"]\",%d",
+                   &year, &mon, &day, &hh, &mm, &ss, tz_str, &dst);
+    }
+    if (n < 7) {
+        n = sscanf(p, "%d/%d/%d,%d,%d,%d,\"%7[^\"]\",%d",
+                   &year, &mon, &day, &hh, &mm, &ss, tz_str, &dst);
+    }
     if (n < 7) {
         return false;
     }
     (void)dst;
+
+    if ((year >= 0) && (year < 100)) {
+        year += 2000;
+    }
 
     if ((year < 2016) || (year > 2099) ||
         (mon < 1) || (mon > 12) ||
@@ -415,6 +451,7 @@ static bool prv_parse_psuttz_epoch(const char* line, uint64_t* out_epoch_centi)
         return false;
     }
 
+    /* *PSUTTZ is UTC time; convert to the same local-time epoch basis used by +CCLK. */
     epoch_centi += ((int64_t)tz_qh * 15LL * 60LL * 100LL);
     if (epoch_centi < 0) {
         return false;
@@ -997,6 +1034,10 @@ static bool prv_start_session(bool enable_time_auto_update)
         return false;
     }
 
+    /* 이전 동작 로그에서는 세션 시작 시 CFUN=0 bootstrap 없이 기존 attach 상태를 그대로 사용했다.
+     * 전송 세션에서는 여기서 모뎀을 다시 내려 등록을 깨지 말고, legacy attach profile만 best-effort로 복구한다. */
+    prv_try_restore_legacy_attach_profile();
+
     /* CPIN READY 직후에는 NAS/attach가 아직 흔들릴 수 있어 바로 CTZU/CEREG를 쏘지 않고
      * 잠깐 안정 시간을 둔다. */
     prv_wait_rx_quiet(200u, 1200u);
@@ -1033,8 +1074,6 @@ static bool prv_prepare_apn_before_time_sync(void)
         return true;
     }
 
-    s_catm1_startup_apn_configured_this_power = true;
-
     prv_wait_rx_quiet(100u, 500u);
     rsp[0] = '\0';
     did_cfun0 = prv_send_cmd_wait("AT+CFUN=0\r\n", "OK", NULL, NULL,
@@ -1043,6 +1082,10 @@ static bool prv_prepare_apn_before_time_sync(void)
         prv_wait_rx_quiet(100u, GW_CATM1_APN_BOOTSTRAP_CFUN_OFF_SETTLE_MS);
     }
 
+    /* Keep bootstrap aligned with the older working sequence:
+     * CFUN=0 -> APN/PDP config -> CFUN=1.
+     * Avoid forcing RAT/NB profile here because some field units stayed in
+     * long operator-search state after CNMP/CMNB changes. */
     (void)snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"\r\n", UI_CATM1_1NCE_APN);
     rsp[0] = '\0';
     if (!prv_send_cmd_wait(cmd, "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
@@ -1050,7 +1093,9 @@ static bool prv_prepare_apn_before_time_sync(void)
     }
 
     prv_wait_rx_quiet(100u, 400u);
-    (void)snprintf(cmd, sizeof(cmd), "AT+CNCFG=0,1,\"%s\",\"\",\"\",1\r\n", UI_CATM1_1NCE_APN);
+    /* Legacy working trace used auth/profile tail 0 during the bootstrap-only time-sync session.
+     * Real data sessions still switch to ...,1 inside prv_activate_pdp(). */
+    (void)snprintf(cmd, sizeof(cmd), "AT+CNCFG=0,1,\"%s\",\"\",\"\",0\r\n", UI_CATM1_1NCE_APN);
     rsp[0] = '\0';
     if (!prv_send_cmd_wait(cmd, "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
         return false;
@@ -1082,7 +1127,21 @@ static bool prv_prepare_apn_before_time_sync(void)
     rsp[0] = '\0';
     (void)prv_send_cmd_wait("AT+CEREG=2\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
     prv_wait_rx_quiet(100u, 400u);
+
+    s_catm1_startup_apn_configured_this_power = true;
     return true;
+}
+
+static void prv_try_restore_legacy_attach_profile(void)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+
+    rsp[0] = '\0';
+    /* 이전 정상 로그에 있던 CMNB=1만 best-effort로 복구한다.
+     * COPS=0 / CGATT=1 강제 경로는 등록 상태를 더 흔들어 제외한다. */
+    (void)prv_send_cmd_wait("AT+CMNB=1\r\n", "OK", NULL, NULL,
+                            UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
+    prv_wait_rx_quiet(100u, 300u);
 }
 
 static bool prv_apply_time_auto_update_cfg(void)
@@ -1487,24 +1546,23 @@ static bool prv_wait_eps_registered_until(uint32_t timeout_ms)
     uint8_t stat = 0u;
     uint32_t start = HAL_GetTick();
     uint32_t effective_timeout_ms = timeout_ms;
+    uint32_t poll_count = 0u;
     uint8_t query_fail_streak = 0u;
 
     if (effective_timeout_ms < GW_CATM1_NET_REG_MIN_TIMEOUT_MS) {
         effective_timeout_ms = GW_CATM1_NET_REG_MIN_TIMEOUT_MS;
     }
 
-    while ((uint32_t)(HAL_GetTick() - start) < effective_timeout_ms) {
+    while (((uint32_t)(HAL_GetTick() - start) < effective_timeout_ms) &&
+           (poll_count < GW_CATM1_CEREG_MAX_POLLS)) {
+        poll_count++;
+
         if (prv_send_query_wait_prefix_ok("AT+CEREG?\r\n", "+CEREG:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
             prv_parse_cereg_stat(rsp, &stat)) {
             query_fail_streak = 0u;
-
             if ((stat == 1u) || (stat == 5u) || (stat == 9u) || (stat == 10u)) {
                 return true;
             }
-
-            /* 0/2는 미등록/검색중, 6/7/8은 SMS only/emergency 상태라 데이터는 아직 불가하지만
-             * 실제 현장에서는 잠시 후 5로 올라가는 경우가 있어 즉시 실패로 보지 않는다.
-             * 3/4도 세션을 바로 끊지 않고 timeout까지 기다렸다가 판단한다. */
         } else {
             query_fail_streak++;
             if (query_fail_streak >= GW_CATM1_QUERY_FAIL_RESYNC_STREAK) {
@@ -1514,7 +1572,10 @@ static bool prv_wait_eps_registered_until(uint32_t timeout_ms)
                 prv_wait_rx_quiet(150u, 700u);
             }
         }
-        prv_delay_ms(UI_CATM1_NET_REG_POLL_MS);
+
+        if (poll_count < GW_CATM1_CEREG_MAX_POLLS) {
+            prv_delay_ms(GW_CATM1_CEREG_POLL_GAP_MS);
+        }
     }
     return false;
 }
@@ -2448,6 +2509,7 @@ void GW_Catm1_Init(void)
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
+    s_catm1_startup_apn_configured_this_power = false;
     prv_power_leds_blink_twice();
 }
 
@@ -2462,6 +2524,7 @@ void GW_Catm1_PowerOn(void)
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
+    s_catm1_startup_apn_configured_this_power = false;
 
     if (s_catm1_last_poweroff_ms != 0u) {
         uint32_t elapsed = (uint32_t)(now - s_catm1_last_poweroff_ms);
