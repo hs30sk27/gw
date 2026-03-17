@@ -53,6 +53,7 @@ static uint8_t s_slot_idx = 0;
 static uint8_t s_slot_cnt = 0;
 static uint8_t s_rx_expected_nodes = 0u;
 static uint32_t s_rx_window_deadline_ms = 0u;
+static uint32_t s_rx_cycle_start_ms = 0u;
 static uint64_t s_rx_nodes_seen_mask = 0u;
 static uint32_t s_data_freq_hz = 0;
 static bool s_rx_cycle_minute_test = false;
@@ -876,16 +877,52 @@ static void prv_requeue_events(uint32_t ev_mask)
     }
 }
 
+static uint32_t prv_get_rx_slot_timeout_ms(void)
+{
+    uint32_t now_ms;
+    uint32_t slot_deadline_ms;
+
+    if (s_rx_cycle_start_ms == 0u) {
+        return UI_SLOT_DURATION_MS;
+    }
+
+    now_ms = HAL_GetTick();
+    slot_deadline_ms = s_rx_cycle_start_ms + (((uint32_t)s_slot_idx + 1u) * UI_SLOT_DURATION_MS);
+    if ((s_rx_window_deadline_ms != 0u) &&
+        ((int32_t)(slot_deadline_ms - s_rx_window_deadline_ms) > 0)) {
+        slot_deadline_ms = s_rx_window_deadline_ms;
+    }
+    if ((int32_t)(slot_deadline_ms - now_ms) <= 0) {
+        return 1u;
+    }
+    return (slot_deadline_ms - now_ms);
+}
+
+static bool prv_rx_nominal_window_elapsed(void)
+{
+    uint32_t nominal_end_ms;
+
+    if ((s_rx_cycle_start_ms == 0u) || (s_rx_expected_nodes == 0u)) {
+        return false;
+    }
+
+    nominal_end_ms = s_rx_cycle_start_ms + ((uint32_t)s_rx_expected_nodes * UI_SLOT_DURATION_MS);
+    return ((int32_t)(HAL_GetTick() - nominal_end_ms) >= 0);
+}
+
 static bool prv_arm_rx_slot(void)
 {
+    uint32_t timeout_ms;
+
     if (!prv_radio_ready_for_rx()) {
         return false;
     }
     if (!UI_Radio_PrepareRx(UI_NODE_PAYLOAD_LEN)) {
         return false;
     }
+    timeout_ms = prv_get_rx_slot_timeout_ms();
     Radio.SetChannel(s_data_freq_hz);
-    Radio.Rx(UI_SLOT_DURATION_MS);
+    Radio.Rx(timeout_ms);
     return true;
 }
 
@@ -1239,8 +1276,9 @@ void GW_App_Process(void)
             }
             s_slot_idx = 0;
             s_rx_expected_nodes = s_slot_cnt;
+            s_rx_cycle_start_ms = HAL_GetTick();
             s_rx_nodes_seen_mask = 0u;
-            s_rx_window_deadline_ms = HAL_GetTick() + ((uint32_t)s_slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
+            s_rx_window_deadline_ms = s_rx_cycle_start_ms + ((uint32_t)s_slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
             if (!prv_radio_ready_for_rx()) {
                 prv_schedule_wakeup();
                 return;
@@ -1257,6 +1295,7 @@ void GW_App_Process(void)
                 s_rx_cycle_minute_test = false;
                 s_rx_cycle_stamp_sec = 0u;
                 s_rx_window_deadline_ms = 0u;
+                s_rx_cycle_start_ms = 0u;
                 s_rx_expected_nodes = 0u;
                 s_rx_nodes_seen_mask = 0u;
                 prv_schedule_wakeup();
@@ -1381,6 +1420,7 @@ void GW_App_Init(void)
     s_rx_cycle_minute_test = false;
     s_rx_cycle_stamp_sec = 0u;
     s_rx_window_deadline_ms = 0u;
+    s_rx_cycle_start_ms = 0u;
     s_rx_expected_nodes = 0u;
     s_rx_nodes_seen_mask = 0u;
     s_catm1_retry_not_before_ms = 0u;
@@ -1487,6 +1527,7 @@ static void prv_close_rx_cycle_and_commit(void)
     s_state = GW_STATE_IDLE;
     UI_LPM_UnlockStop();
     s_rx_window_deadline_ms = 0u;
+    s_rx_cycle_start_ms = 0u;
     s_rx_expected_nodes = 0u;
     s_rx_nodes_seen_mask = 0u;
 
@@ -1523,7 +1564,8 @@ static void prv_rx_next_slot(void)
     Radio.Sleep();
     s_slot_idx++;
 
-    if (prv_rx_window_expired() || prv_rx_all_expected_nodes_seen()) {
+    if (prv_rx_window_expired() ||
+        (prv_rx_all_expected_nodes_seen() && prv_rx_nominal_window_elapsed())) {
         prv_close_rx_cycle_and_commit();
         return;
     }
@@ -1532,6 +1574,7 @@ static void prv_rx_next_slot(void)
         s_rx_cycle_minute_test = false;
         s_rx_cycle_stamp_sec = 0u;
         s_rx_window_deadline_ms = 0u;
+        s_rx_cycle_start_ms = 0u;
         s_rx_expected_nodes = 0u;
         s_rx_nodes_seen_mask = 0u;
         s_state = GW_STATE_IDLE;
@@ -1543,6 +1586,7 @@ static void prv_rx_next_slot(void)
         s_rx_cycle_minute_test = false;
         s_rx_cycle_stamp_sec = 0u;
         s_rx_window_deadline_ms = 0u;
+        s_rx_cycle_start_ms = 0u;
         s_rx_expected_nodes = 0u;
         s_rx_nodes_seen_mask = 0u;
         s_state = GW_STATE_IDLE;

@@ -357,6 +357,10 @@ static void prv_send_setting_read(void)
     /* GW에서는 ND CNT를 노드 개수(1..50) 의미로 사용 */
     (void)snprintf(line, sizeof(line), "ND CNT:%u\r\n", cfg->max_nodes);
     UI_UART_SendString(line);
+    /* 현장에서는 ND NUM을 마지막 노드 번호(0-based)로 쓰는 경우가 많아 함께 보여준다. */
+    (void)snprintf(line, sizeof(line), "ND NUM:%u\r\n",
+                   (unsigned)((cfg->max_nodes > 0u) ? (cfg->max_nodes - 1u) : 0u));
+    UI_UART_SendString(line);
 
     /* GW 번호(0..2)도 같이 확인 가능하도록 출력 */
     (void)snprintf(line, sizeof(line), "GW NUM:%u\r\n", cfg->gw_num);
