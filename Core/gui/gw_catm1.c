@@ -1152,9 +1152,16 @@ static bool prv_prepare_apn_before_time_sync(void)
         }
 
         prv_wait_rx_quiet(200u, 1200u);
+        /* CFUN=1 직후에는 +CPIN: READY가 먼저 보여도 SIM/NAS 내부 기동이 남아 있을 수 있다.
+         * 곧바로 COPS를 보내면 +CME ERROR: SIM failure가 튀고, 바로 다음 명령과 스트림이
+         * 섞일 수 있으므로 세션 시작부와 같은 안정 시간을 한 번 더 준다. */
+        prv_delay_ms(GW_CATM1_POST_CPIN_NETWORK_SETTLE_MS);
+        prv_wait_rx_quiet(100u, 400u);
 
         /* CFUN=1 복귀 직후에는 자동 사업자 선택을 다시 걸어 망 탐색을 정상 경로로 시작시킨다. */
-        (void)prv_request_auto_operator_select(true);
+        if (!prv_request_auto_operator_select(true)) {
+            prv_wait_rx_quiet(200u, GW_CATM1_COPS_AUTO_SETTLE_MS + 500u);
+        }
     }
 
     rsp[0] = '\0';
@@ -1598,6 +1605,10 @@ static bool prv_request_auto_operator_select(bool force_send)
     rsp[0] = '\0';
     if (!prv_send_cmd_wait("AT+COPS=0\r\n", "OK", NULL, NULL,
                            GW_CATM1_COPS_AUTO_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        /* COPS 실패 직후에는 모뎀이 +CME ERROR / +CPIN / SMS Ready URC를
+         * 뒤이어 흘릴 수 있다. 여기서 바로 다음 AT를 보내면 외부 캡처에서는
+         * 실패 메시지와 다음 명령이 문자 단위로 섞여 보이므로 quiet 구간을 확보한다. */
+        prv_wait_rx_quiet(200u, GW_CATM1_COPS_AUTO_SETTLE_MS + 500u);
         return false;
     }
 
