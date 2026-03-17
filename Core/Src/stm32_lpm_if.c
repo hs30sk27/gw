@@ -93,6 +93,8 @@ void PWR_ExitOffMode(void)
 void PWR_EnterStopMode(void)
 {
   /* USER CODE BEGIN EnterStopMode_1 */
+    (void)HAL_ADC_Stop(&hadc);
+    HAL_GPIO_WritePin(GPIOB, W25Q128_CS_Pin|CATM1_PWR_Pin, GPIO_PIN_RESET);
 
 	UI_LPM_BeforeStop_DeInitPeripherals();
 	UI_UART1_TxDma_DeInit();
@@ -102,13 +104,14 @@ void PWR_EnterStopMode(void)
   LL_PWR_ClearFlag_C1STOP_C1STB();
 
   /* USER CODE BEGIN EnterStopMode_2 */
-#if 0
+#if 1
   /* USER CODE END EnterStopMode_2 */
   HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
   /* USER CODE BEGIN EnterStopMode_3 */
 #endif
+#if 0
   HAL_PWREx_EnterSTOP1Mode(PWR_STOPENTRY_WFI);
-
+#endif
   /* USER CODE END EnterStopMode_3 */
 }
 
