@@ -67,6 +67,7 @@ static uint32_t s_last_cycle_minute_id = 0u;
 static uint32_t s_last_save_minute_id = 0xFFFFFFFFu;
 static bool s_catm1_uplink_pending = false;
 static uint32_t s_last_catm1_slot_id = 0xFFFFFFFFu;
+static uint32_t s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
 static uint32_t s_last_2m_prep_slot_id = 0xFFFFFFFFu;
 static uint32_t s_flash_tx_boot_tail_index = 0u;
 static uint32_t s_flash_tx_next_send_index = 0u;
@@ -783,6 +784,18 @@ static void prv_request_catm1_uplink(void)
     s_catm1_uplink_pending = true;
 }
 
+static void prv_request_minute_test_uplink_for_minute(uint32_t minute_id)
+{
+    if (s_last_minute_test_uplink_minute_id == minute_id) {
+        return;
+    }
+    if (((s_last_cycle_valid) && (s_last_cycle_minute_id == minute_id)) ||
+        (prv_flash_tx_pending_count() > 0u)) {
+        s_last_minute_test_uplink_minute_id = minute_id;
+        prv_request_catm1_uplink();
+    }
+}
+
 static const GW_HourRec_t* prv_get_catm1_uplink_record(void)
 {
     if (s_last_cycle_valid) {
@@ -1243,6 +1256,13 @@ void GW_App_Process(void)
 
         if (prv_is_minute_test_active() && (test50_due_now || ((next_test50 < next_beacon) && (next_test50 < next_rx)))) {
             prv_handle_test50_actions(now_sec);
+            if (test50_due_now) {
+                uint32_t due_minute_id = ((uint32_t)(due_test50 / 100u)) / 60u;
+                prv_request_minute_test_uplink_for_minute(due_minute_id);
+                if (prv_run_catm1_uplink_now()) {
+                    return;
+                }
+            }
             prv_schedule_wakeup();
             return;
         }
@@ -1434,6 +1454,7 @@ void GW_App_Init(void)
     s_catm1_uplink_pending = false;
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
+    s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     /* MCU 부팅 시 SIM7080 초기 설정(1NCE APN 포함)을 수행하고
      * 모뎀 시간도 즉시 읽어 보정한다. */
@@ -1453,6 +1474,7 @@ void UI_Hook_OnConfigChanged(void)
     s_catm1_uplink_pending = false;
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
+    s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
     prv_schedule_wakeup();
@@ -1468,6 +1490,7 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
     s_last_save_minute_id = 0xFFFFFFFFu;
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
+    s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
     prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
@@ -1483,6 +1506,7 @@ void UI_Hook_OnTimeChanged(void)
     prv_cancel_pending_beacon_burst();
     s_catm1_uplink_pending = false;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
+    s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_schedule_wakeup();
 }
@@ -1544,11 +1568,13 @@ static void prv_close_rx_cycle_and_commit(void)
         uint32_t now_sec = UI_Time_NowSec2016();
         prv_handle_test50_actions_core(now_sec, true);
         prv_send_ble_test_report_if_active(&s_hour_rec);
-        prv_request_catm1_uplink();
         s_rx_cycle_minute_test = false;
         s_rx_cycle_stamp_sec = 0u;
-        if (prv_run_catm1_uplink_now()) {
-            return;
+        if ((now_sec % 60u) >= 40u) {
+            prv_request_minute_test_uplink_for_minute(now_sec / 60u);
+            if (prv_run_catm1_uplink_now()) {
+                return;
+            }
         }
     } else {
         bool saved_ok = prv_save_hour_rec_verified(&s_hour_rec);
