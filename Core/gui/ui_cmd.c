@@ -562,6 +562,30 @@ static void prv_process_line_impl(const char* line_in, bool silent)
         return;
     }
 
+    /* -------------------- ND NUM:xx / GW ND NUM:xx ------ */
+    if ((strncmp(p, "ND NUM:", 7) == 0) || (strncmp(p, "GW ND NUM:", 10) == 0))
+    {
+        const char* q = (strncmp(p, "GW ND NUM:", 10) == 0) ? (p + 10) : (p + 7);
+        uint8_t v = 0;
+        if (prv_parse_u8_dec(q, &v) <= 0)
+        {
+            prv_send_error();
+            return;
+        }
+
+        /* 호환 모드: ND NUM:xx = 마지막 노드 번호(0-based) */
+        if (v < UI_MAX_NODES)
+        {
+            UI_SetMaxNodes((uint8_t)(v + 1u));
+            (void)prv_commit_config_changed();
+        }
+        else
+        {
+            prv_send_error();
+        }
+        return;
+    }
+
     /* -------------------- ND CNT:xx / GW ND CNT:xx ------ */
     if ((strncmp(p, "ND CNT:", 7) == 0) || (strncmp(p, "GW ND CNT:", 10) == 0))
     {

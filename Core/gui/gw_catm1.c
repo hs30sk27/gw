@@ -245,12 +245,12 @@ static int8_t prv_apply_tcp_temp_comp_c(int8_t temp_c)
     return (int8_t)v;
 }
 
-static char prv_gw_voltage_flag(uint8_t gw_volt_x10)
+static const char* prv_gw_voltage_text(uint8_t gw_volt_x10)
 {
     if (gw_volt_x10 == 0xFFu) {
-        return '-';
+        return "-";
     }
-    return (gw_volt_x10 >= UI_NODE_BATT_LOW_THRESHOLD_X10) ? 'Y' : 'N';
+    return (gw_volt_x10 >= UI_NODE_BATT_LOW_THRESHOLD_X10) ? "3.4" : "LOW";
 }
 
 static const char* prv_node_voltage_text(uint8_t batt_lvl)
@@ -2502,7 +2502,7 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
     char set0, set1, set2;
     char loc_buf[192];
     char ts_buf[32];
-    char gw_volt_flag;
+    const char* gw_volt_text;
     int gw_temp_c;
 
     if ((rec == NULL) || (out == NULL) || (out_sz < 64u) || (cfg == NULL)) {
@@ -2516,24 +2516,25 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
     set1 = (char)cfg->setting_ascii[1];
     set2 = (char)cfg->setting_ascii[2];
     prv_format_epoch2016(rec->epoch_sec, ts_buf, sizeof(ts_buf));
-    gw_volt_flag = prv_gw_voltage_flag(rec->gw_volt_x10);
+    gw_volt_text = prv_gw_voltage_text(rec->gw_volt_x10);
     gw_temp_c = (int)prv_apply_tcp_temp_comp_c(rec->gw_temp_c);
 
     prv_append_fmt(out, out_sz, &len,
-                   "T:%s,NID:%.*s,GW:%u,L:%s,S:%c%c%c,GV:%c,GT:%d",
+                   "T:%s,NID:%.*s,GW:%u,L:%s,S:%c%c%c,GV:%s,GT:%d",
                    ts_buf,
                    (int)UI_NET_ID_LEN,
                    (const char*)cfg->net_id,
                    (unsigned)cfg->gw_num,
                    loc_buf,
                    set0, set1, set2,
-                   gw_volt_flag,
+                   gw_volt_text,
                    gw_temp_c);
 
     for (i = 0u; i < node_limit; i++) {
         const GW_NodeRec_t* r = &rec->nodes[i];
         const char* node_volt_text;
         int node_temp_c;
+        bool icm_valid;
 
         if (!prv_node_valid(r)) {
             continue;
@@ -2545,16 +2546,33 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
 
         node_volt_text = prv_node_voltage_text(r->batt_lvl);
         node_temp_c = (int)r->temp_c;
+        icm_valid = (((uint16_t)r->x != 0xFFFFu) ||
+                     ((uint16_t)r->y != 0xFFFFu) ||
+                     ((uint16_t)r->z != 0xFFFFu));
+
         prv_append_fmt(out, out_sz, &len,
-                       ",ND:%02lu,V:%s,T:%d,X:%d,Y:%d,Z:%d,A:%u,P:%lu",
+                       ",ND:%02lu,V:%s,T:%d",
                        (unsigned long)i,
                        node_volt_text,
-                       node_temp_c,
-                       (int)r->x,
-                       (int)r->y,
-                       (int)r->z,
-                       (unsigned)r->adc,
-                       (unsigned long)r->pulse_cnt);
+                       node_temp_c);
+
+        if (icm_valid) {
+            prv_append_fmt(out, out_sz, &len,
+                           ",X:%d,Y:%d,Z:%d",
+                           (int)r->x,
+                           (int)r->y,
+                           (int)r->z);
+        }
+        if (r->adc != 0xFFFFu) {
+            prv_append_fmt(out, out_sz, &len,
+                           ",A:%u",
+                           (unsigned)r->adc);
+        }
+        if (r->pulse_cnt != 0xFFFFFFFFu) {
+            prv_append_fmt(out, out_sz, &len,
+                           ",P:%lu",
+                           (unsigned long)r->pulse_cnt);
+        }
     }
     if (truncated) {
         prv_append_fmt(out, out_sz, &len, ",TRUNC:1");

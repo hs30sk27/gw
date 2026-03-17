@@ -148,19 +148,50 @@ bool GW_BleReport_SendMinuteTestRecord(const GW_HourRec_t* rec)
             continue;
         }
 
+        size_t len;
+        bool icm_valid;
         prv_format_batt(bbuf, sizeof(bbuf), r->batt_lvl);
         prv_format_temp_c(ntbuf, sizeof(ntbuf), r->temp_c);
 
-        (void)snprintf(line, sizeof(line),
-                       "ND:%02lu,B:%s,T:%s,X:%d,Y:%d,Z:%d,ADC:%u,PULSE:%lu\r\n",
-                       (unsigned long)i,
-                       bbuf,
-                       ntbuf,
-                       (int)r->x,
-                       (int)r->y,
-                       (int)r->z,
-                       (unsigned)r->adc,
-                       (unsigned long)r->pulse_cnt);
+        len = (size_t)snprintf(line, sizeof(line),
+                               "ND:%02lu,B:%s,T:%s",
+                               (unsigned long)i,
+                               bbuf,
+                               ntbuf);
+
+        icm_valid = (((uint16_t)r->x != 0xFFFFu) ||
+                     ((uint16_t)r->y != 0xFFFFu) ||
+                     ((uint16_t)r->z != 0xFFFFu));
+        if ((len < sizeof(line)) && icm_valid)
+        {
+            len += (size_t)snprintf(line + len, sizeof(line) - len,
+                                    ",X:%d,Y:%d,Z:%d",
+                                    (int)r->x,
+                                    (int)r->y,
+                                    (int)r->z);
+        }
+        if ((len < sizeof(line)) && (r->adc != 0xFFFFu))
+        {
+            len += (size_t)snprintf(line + len, sizeof(line) - len,
+                                    ",ADC:%u",
+                                    (unsigned)r->adc);
+        }
+        if ((len < sizeof(line)) && (r->pulse_cnt != 0xFFFFFFFFu))
+        {
+            len += (size_t)snprintf(line + len, sizeof(line) - len,
+                                    ",PULSE:%lu",
+                                    (unsigned long)r->pulse_cnt);
+        }
+        if (len < sizeof(line))
+        {
+            (void)snprintf(line + len, sizeof(line) - len, "\r\n");
+        }
+        else
+        {
+            line[sizeof(line) - 3u] = '\r';
+            line[sizeof(line) - 2u] = '\n';
+            line[sizeof(line) - 1u] = '\0';
+        }
         UI_UART_SendString(line);
     }
 

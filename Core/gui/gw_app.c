@@ -1050,13 +1050,14 @@ void GW_App_Process(void)
                     const UI_Config_t* cfg = UI_GetConfig();
                     if (memcmp(nd.net_id, cfg->net_id, UI_NET_ID_LEN) == 0) {
                         GW_NodeRec_t* r = &s_hour_rec.nodes[nd.node_num];
+                        uint8_t sensor_en_mask = (uint8_t)(nd.sensor_en_mask & UI_SENSOR_EN_ALL);
                         r->batt_lvl = nd.batt_lvl;
                         r->temp_c = nd.temp_c;
-                        r->x = nd.x;
-                        r->y = nd.y;
-                        r->z = nd.z;
-                        r->adc = nd.adc;
-                        r->pulse_cnt = nd.pulse_cnt;
+                        r->x = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.x : (int16_t)0xFFFFu;
+                        r->y = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.y : (int16_t)0xFFFFu;
+                        r->z = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.z : (int16_t)0xFFFFu;
+                        r->adc = ((sensor_en_mask & UI_SENSOR_EN_ADC) != 0u) ? nd.adc : 0xFFFFu;
+                        r->pulse_cnt = ((sensor_en_mask & UI_SENSOR_EN_PULSE) != 0u) ? nd.pulse_cnt : 0xFFFFFFFFu;
                         if (nd.node_num < s_rx_expected_nodes) {
                             prv_rx_note_node_received(nd.node_num);
                         }
