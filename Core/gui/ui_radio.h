@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "subghz_phy_app.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

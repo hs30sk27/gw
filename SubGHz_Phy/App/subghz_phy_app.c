@@ -112,6 +112,19 @@ void SubghzApp_Init(void)
 }
 
 /* USER CODE BEGIN EF */
+static void prv_toggle_led0_debug(void)
+{
+#if defined(LED0_GPIO_Port) && defined(LED0_Pin)
+  HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
+#endif
+}
+
+void SubghzApp_ReInitRadio(void)
+{
+  Radio.Init(&RadioEvents);
+  prv_toggle_led0_debug();
+  Radio.Sleep();
+}
 
 /* USER CODE END EF */
 

@@ -68,6 +68,7 @@ static uint32_t s_last_save_minute_id = 0xFFFFFFFFu;
 static bool s_catm1_uplink_pending = false;
 static uint32_t s_last_catm1_slot_id = 0xFFFFFFFFu;
 static uint32_t s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
+static uint32_t s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
 static uint32_t s_last_2m_prep_slot_id = 0xFFFFFFFFu;
 static uint32_t s_flash_tx_boot_tail_index = 0u;
 static uint32_t s_flash_tx_next_send_index = 0u;
@@ -532,6 +533,27 @@ static void prv_mark_cycle_complete(const GW_HourRec_t* rec)
     s_last_cycle_minute_id = rec->epoch_sec / 60u;
 }
 
+static bool prv_should_prioritize_live_snapshot_over_backlog(const GW_HourRec_t* rec, uint32_t pending)
+{
+    uint32_t now_minute_id;
+
+    if ((rec == NULL) || (pending == 0u) || !s_last_cycle_valid) {
+        return false;
+    }
+    if (!prv_is_minute_test_active()) {
+        return false;
+    }
+    if (rec->epoch_sec != s_last_cycle_rec.epoch_sec) {
+        return false;
+    }
+    if (s_last_live_uplink_epoch_sec == rec->epoch_sec) {
+        return false;
+    }
+
+    now_minute_id = UI_Time_NowSec2016() / 60u;
+    return (s_last_cycle_minute_id == now_minute_id);
+}
+
 static uint32_t prv_flash_tx_clamp_floor_to_boot_tail(uint32_t floor_index)
 {
     if (floor_index < s_flash_tx_boot_tail_index) {
@@ -837,6 +859,23 @@ static bool prv_run_catm1_uplink_now(void)
 
     rec = prv_get_catm1_uplink_record();
     pending = prv_flash_tx_pending_count();
+
+    if (prv_should_prioritize_live_snapshot_over_backlog(rec, pending)) {
+        bool sent_ok = GW_Catm1_SendSnapshot(rec);
+
+        if (sent_ok && (rec != NULL)) {
+            s_last_live_uplink_epoch_sec = rec->epoch_sec;
+        }
+        s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
+        if ((!sent_ok) && s_catm1_uplink_pending) {
+            s_catm1_retry_not_before_ms = now_ms + GW_CATM1_RETRY_DELAY_MS;
+        } else {
+            s_catm1_retry_not_before_ms = 0u;
+        }
+        prv_schedule_wakeup();
+        return true;
+    }
+
     if (pending > 0u) {
         GW_FileRec_t first_rec;
         uint32_t sent_count = 0u;
@@ -878,6 +917,9 @@ static bool prv_run_catm1_uplink_now(void)
 
     if (rec != NULL) {
         bool sent_ok = GW_Catm1_SendSnapshot(rec);
+        if (sent_ok) {
+            s_last_live_uplink_epoch_sec = rec->epoch_sec;
+        }
         s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
         if ((!sent_ok) && s_catm1_uplink_pending) {
             /* live snapshot이 flash backlog로 넘어간 경우에는 pending을 유지해야
@@ -1501,6 +1543,7 @@ void GW_App_Init(void)
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
+    s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     /* MCU 부팅 시 SIM7080 초기 설정(1NCE APN 포함)을 수행하고
      * 모뎀 시간도 즉시 읽어 보정한다. */
@@ -1521,6 +1564,7 @@ void UI_Hook_OnConfigChanged(void)
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
+    s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
     prv_schedule_wakeup();
@@ -1537,6 +1581,7 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
+    s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
     prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
@@ -1553,6 +1598,7 @@ void UI_Hook_OnTimeChanged(void)
     s_catm1_uplink_pending = false;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
+    s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_schedule_wakeup();
 }
@@ -1688,7 +1734,6 @@ void GW_Radio_OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr
 
 void GW_Radio_OnRxTimeout(void)
 {
-    UI_Radio_MarkRecoverNeeded();
     s_evt_flags |= GW_EVT_RADIO_RX_TIMEOUT;
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }

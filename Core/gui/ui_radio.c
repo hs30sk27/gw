@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "radio.h"
+#include "subghz_phy_app.h"
 
 #ifndef UI_RF_LORA_BW_ENUM
 #define UI_RF_LORA_BW_ENUM            (0u)
@@ -55,7 +56,7 @@ static bool prv_prepare_common(uint8_t payload_len)
 
     if (s_recover_needed)
     {
-        Radio.Sleep();
+        SubghzApp_ReInitRadio();
         s_recover_needed = false;
     }
 
