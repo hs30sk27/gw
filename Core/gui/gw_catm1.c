@@ -2623,6 +2623,8 @@ void GW_Catm1_Init(void)
 #if defined(CATM1_PWR_Pin)
     HAL_GPIO_WritePin(CATM1_PWR_GPIO_Port, CATM1_PWR_Pin, GPIO_PIN_RESET);
 #endif
+    /* 부팅 직후 기본 idle 전류를 줄이기 위해 LPUART도 즉시 내려 둔다. */
+    prv_lpuart_release();
     s_catm1_last_poweroff_ms = HAL_GetTick();
     prv_power_leds_blink_twice();
 }

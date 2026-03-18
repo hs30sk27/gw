@@ -41,6 +41,34 @@ extern DMA_HandleTypeDef  hdma_usart1_tx;
 #endif
 extern void UI_Radio_EnterSleep(void);
 
+static void prv_force_stop_pin_levels(void)
+{
+#if defined(W25Q128_CS_GPIO_Port) && defined(W25Q128_CS_Pin)
+    HAL_GPIO_WritePin(W25Q128_CS_GPIO_Port, W25Q128_CS_Pin, GPIO_PIN_SET);
+#endif
+#if defined(CATM1_PWR_GPIO_Port) && defined(CATM1_PWR_Pin)
+    HAL_GPIO_WritePin(CATM1_PWR_GPIO_Port, CATM1_PWR_Pin, GPIO_PIN_RESET);
+#endif
+#if defined(PWR_KEY_GPIO_Port) && defined(PWR_KEY_Pin)
+    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
+#endif
+#if defined(BT_EN_GPIO_Port) && defined(BT_EN_Pin)
+    HAL_GPIO_WritePin(BT_EN_GPIO_Port, BT_EN_Pin, GPIO_PIN_RESET);
+#endif
+#if defined(LED0_GPIO_Port) && defined(LED0_Pin)
+    HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);
+#endif
+#if defined(LED1_GPIO_Port) && defined(LED1_Pin)
+    HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+#endif
+#if defined(RF_TXEN_GPIO_Port) && defined(RF_TXEN_Pin)
+    HAL_GPIO_WritePin(RF_TXEN_GPIO_Port, RF_TXEN_Pin, GPIO_PIN_RESET);
+#endif
+#if defined(RF_RXEN_GPIO_Port) && defined(RF_RXEN_Pin)
+    HAL_GPIO_WritePin(RF_RXEN_GPIO_Port, RF_RXEN_Pin, GPIO_PIN_RESET);
+#endif
+}
+
 static void prv_disable_spi_clock(const SPI_HandleTypeDef *hspi)
 {
 #if defined(SPI1) && defined(__HAL_RCC_SPI1_CLK_DISABLE)
@@ -177,6 +205,9 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
      */
     GW_Storage_W25Q_PowerDown();
 
+    /* 외부 부하가 남지 않도록 제어 핀을 저전력 상태로 고정 */
+    prv_force_stop_pin_levels();
+
     /* SW 상태 정리: 다음 wake-up 이후 재진입 시 꼬임 방지 */
     UI_Core_ClearFlagsBeforeStop();
     UI_GPIO_ClearEvents();
@@ -224,7 +255,9 @@ void UI_LPM_EnterStopNow(void)
     }
 
     UI_LPM_BeforeStop_DeInitPeripherals();
+    HAL_SuspendTick();
     UTIL_LPM_EnterLowPower();
+    HAL_ResumeTick();
 
     /* wakeup 후: 기본은 아무 것도 하지 않음(최소 전류) */
     UI_LPM_AfterStop_ReInitPeripherals();
