@@ -8,6 +8,7 @@
 #include "ui_ble.h"
 #include "ui_time.h"
 #include "ui_radio.h"
+#include "gw_storage.h"
 
 #include "stm32_lpm.h"
 #include "utilities_def.h" /* CFG_LPM_APPLI_Id */
@@ -168,6 +169,13 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
 
     /* RF가 마지막 상태에 남아 있지 않도록 stop 직전 강제 sleep */
     UI_Radio_EnterSleep();
+
+    /*
+     * W25Q128은 평상시 LittleFS unmount에서 deep power-down으로 내리지만,
+     * stop 직전에도 한 번 더 내려서 SPI DeInit 이후 flash가 standby 전류로
+     * 남아 있지 않도록 한다.
+     */
+    GW_Storage_W25Q_PowerDown();
 
     /* SW 상태 정리: 다음 wake-up 이후 재진입 시 꼬임 방지 */
     UI_Core_ClearFlagsBeforeStop();

@@ -31,7 +31,7 @@ extern void UI_PWR_DeinitForStop(void);
 
 /* External variables ---------------------------------------------------------*/
 /* USER CODE BEGIN EV */
-
+#include "radio.h"
 /* USER CODE END EV */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -94,7 +94,6 @@ void PWR_EnterStopMode(void)
 {
   /* USER CODE BEGIN EnterStopMode_1 */
 
-  (void)HAL_ADC_Stop(&hadc);
   UI_LPM_BeforeStop_DeInitPeripherals();
   UI_UART1_TxDma_DeInit();
 

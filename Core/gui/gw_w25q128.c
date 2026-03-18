@@ -25,6 +25,9 @@ extern SPI_HandleTypeDef hspi1;
 #ifndef GW_W25_WAIT_RESUME_MS
 #define GW_W25_WAIT_RESUME_MS      (2u)
 #endif
+#ifndef GW_W25_WAIT_PD_READY_MS
+#define GW_W25_WAIT_PD_READY_MS    (GW_W25_WAIT_SE_MS)
+#endif
 
 #define GW_W25_CMD_WREN            (0x06u)
 #define GW_W25_CMD_RDSR1           (0x05u)
@@ -235,8 +238,17 @@ void GW_Storage_W25Q_PowerDown(void)
     {
         return;
     }
-    (void)prv_wait_ready(GW_W25_WAIT_PP_MS);
+    if (!prv_spi_ensure_ready())
+    {
+        return;
+    }
+    /*
+     * Stop 진입 직전에도 이 함수를 재사용하므로, page-program보다 긴 sector erase까지
+     * 포함해 ready를 기다린 뒤 deep power-down으로 내린다.
+     */
+    (void)prv_wait_ready(GW_W25_WAIT_PD_READY_MS);
     (void)prv_cmd_only(GW_W25_CMD_POWER_DOWN);
+    prv_cs_high();
 }
 
 int GW_Storage_W25Q_Read(uint32_t addr, void* buf, uint32_t size)

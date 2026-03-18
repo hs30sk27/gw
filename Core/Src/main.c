@@ -22,7 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "radio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -98,12 +98,34 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
-  MX_USART1_UART_Init();
   MX_SubGHz_Phy_Init();
   MX_LPUART1_UART_Init();
   MX_ADC_Init();
   /* USER CODE BEGIN 2 */
+#if 0
+  (void)HAL_ADC_Stop(&hadc);
 
+	UI_LPM_BeforeStop_DeInitPeripherals();
+	UI_UART1_TxDma_DeInit();
+	Radio.Sleep();
+//	  HAL_GPIO_WritePin(GPIOB, W25Q128_CS_Pin|CATM1_PWR_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
+
+
+
+/* USER CODE END EnterStopMode_1 */
+HAL_SuspendTick();
+/* Clear Status Flag before entering STOP/STANDBY Mode */
+LL_PWR_ClearFlag_C1STOP_C1STB();
+
+/* USER CODE BEGIN EnterStopMode_2 */
+
+/* USER CODE END EnterStopMode_2 */
+
+/* USER CODE BEGIN EnterStopMode_3 */
+HAL_PWREx_EnterSTOP1Mode(PWR_STOPENTRY_WFI);
+#endif
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -519,7 +541,7 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin : BATT_LVL_Pin */
   GPIO_InitStruct.Pin = BATT_LVL_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(BATT_LVL_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PH3 */
