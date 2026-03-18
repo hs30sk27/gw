@@ -198,6 +198,8 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
     /* RF가 마지막 상태에 남아 있지 않도록 stop 직전 강제 sleep */
     UI_Radio_EnterSleep();
 
+
+
     /*
      * W25Q128은 평상시 LittleFS unmount에서 deep power-down으로 내리지만,
      * stop 직전에도 한 번 더 내려서 SPI DeInit 이후 flash가 standby 전류로
@@ -213,7 +215,6 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
     UI_GPIO_ClearEvents();
     UI_UART_ResetRxBuffer();
     UI_BLE_ClearFlagsBeforeStop();
-
 #if defined(HAL_ADC_MODULE_ENABLED)
     (void)HAL_ADC_DeInit(&hadc);
     prv_disable_adc_clock(&hadc);
