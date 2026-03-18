@@ -69,6 +69,52 @@ static void prv_force_stop_pin_levels(void)
 #endif
 }
 
+static void prv_set_gpio_analog(GPIO_TypeDef *port, uint32_t pins)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    if ((port == NULL) || (pins == 0u))
+    {
+        return;
+    }
+
+    GPIO_InitStruct.Pin = pins;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(port, &GPIO_InitStruct);
+}
+
+static void prv_configure_deinited_pins_for_stop(void)
+{
+    /*
+     * 업로드된 기준 파일처럼 stop 직전 deinit된 UART 핀은 analog/no-pull로 내려
+     * 외부 모듈(BLE, CATM1)과 연결된 라인에서 누설 전류가 생기지 않도록 한다.
+     * SPI1 핀도 동일하게 analog로 내려 flash deep power-down 이후 잔류 전류를 줄인다.
+     */
+#if defined(__HAL_RCC_GPIOA_CLK_ENABLE)
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+#endif
+#if defined(__HAL_RCC_GPIOB_CLK_ENABLE)
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+#endif
+
+#if defined(BLE_TX_GPIO_Port) && defined(BLE_TX_Pin)
+    prv_set_gpio_analog(BLE_TX_GPIO_Port, BLE_TX_Pin);
+#endif
+#if defined(BLE_RX_GPIO_Port) && defined(BLE_RX_Pin)
+    prv_set_gpio_analog(BLE_RX_GPIO_Port, BLE_RX_Pin);
+#endif
+#if defined(CATM1_RX_GPIO_Port) && defined(CATM1_RX_Pin)
+    prv_set_gpio_analog(CATM1_RX_GPIO_Port, CATM1_RX_Pin);
+#endif
+#if defined(CATM1_TX_GPIO_Port) && defined(CATM1_TX_Pin)
+    prv_set_gpio_analog(CATM1_TX_GPIO_Port, CATM1_TX_Pin);
+#endif
+#if defined(GPIOB)
+    prv_set_gpio_analog(GPIOB, GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5);
+#endif
+}
+
 static void prv_disable_spi_clock(const SPI_HandleTypeDef *hspi)
 {
 #if defined(SPI1) && defined(__HAL_RCC_SPI1_CLK_DISABLE)
@@ -216,6 +262,7 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
     UI_UART_ResetRxBuffer();
     UI_BLE_ClearFlagsBeforeStop();
 #if defined(HAL_ADC_MODULE_ENABLED)
+    (void)HAL_ADC_Stop(&hadc);
     (void)HAL_ADC_DeInit(&hadc);
     prv_disable_adc_clock(&hadc);
 #endif
@@ -232,6 +279,8 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
     (void)HAL_SPI_DeInit(&hspi1);
     prv_disable_spi_clock(&hspi1);
 #endif
+
+    prv_configure_deinited_pins_for_stop();
 }
 
 void UI_LPM_AfterStop_ReInitPeripherals(void)

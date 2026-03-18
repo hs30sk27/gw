@@ -45,6 +45,7 @@ static volatile uint32_t s_evt_flags = 0;
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
 #define GW_RX_WINDOW_GUARD_MS   (300u)
+#define GW_RX_PRESTART_MS       (500u)
 
 static bool s_test_mode = false;
 static bool s_ble_test_session_active = false;
@@ -526,6 +527,11 @@ static bool prv_is_minute_test_active(void)
 static uint64_t prv_next_test50_centi(uint64_t now_centi)
 {
     return prv_next_event_centi(now_centi, 60u, 40u);
+}
+
+static uint64_t prv_get_rx_prestart_centi(void)
+{
+    return ((uint64_t)GW_RX_PRESTART_MS + 9u) / 10u;
 }
 
 static void prv_mark_cycle_complete(const GW_HourRec_t* rec)
@@ -1331,10 +1337,12 @@ void GW_App_Process(void)
         uint64_t due_prep = 0u;
         uint64_t due_test50 = 0u;
         uint64_t due_catm1 = 0u;
+        uint64_t rx_prestart_centi = prv_get_rx_prestart_centi();
         bool beacon_due_now = prv_is_event_due_now(now_centi, beacon_interval, beacon_off, 120u, &due_beacon);
         bool rx_due_now = prv_is_event_due_now(now_centi, rx_interval, rx_start, 120u, &due_rx);
         bool reminder_due_now = have_reminder && prv_is_event_due_now(now_centi, rx_interval, reminder_off, 120u, &due_reminder);
         bool prep_due_now = have_two_min_prep && prv_is_event_due_now(now_centi, rx_interval, two_min_prep_off, 120u, &due_prep);
+        bool rx_prestart_now = false;
         bool test50_due_now = false;
         bool catm1_due_now = false;
 
@@ -1346,6 +1354,13 @@ void GW_App_Process(void)
             uint32_t catm1_period = prv_get_catm1_period_sec();
             next_catm1 = prv_next_event_centi(now_centi, catm1_period, prv_get_catm1_offset_sec());
             catm1_due_now = prv_is_event_due_now(now_centi, catm1_period, prv_get_catm1_offset_sec(), 120u, &due_catm1);
+        }
+
+        if ((!rx_due_now) && (next_rx > now_centi) && ((next_rx - now_centi) <= rx_prestart_centi)) {
+            /* 1분 테스트에서는 ND가 20초 + 약 150ms에 바로 송신한다.
+             * GW가 20초 정각에야 깨어나면 STOP 복귀/Radio 준비 지연 때문에 첫 패킷을 놓칠 수 있으므로
+             * RX를 약간 일찍 arm 해 두고 nominal slot 경계는 별도로 유지한다. */
+            rx_prestart_now = true;
         }
 
         if (catm1_due_now) {
@@ -1398,7 +1413,7 @@ void GW_App_Process(void)
             return;
         }
 
-        if (prv_should_try_catm1_uplink_now(now_sec) && !beacon_due_now && !rx_due_now) {
+        if (prv_should_try_catm1_uplink_now(now_sec) && !beacon_due_now && !rx_due_now && !rx_prestart_now) {
             if (prv_run_catm1_uplink_now()) {
                 return;
             }
@@ -1414,12 +1429,18 @@ void GW_App_Process(void)
             return;
         }
 
-        if (rx_due_now) {
+        if (rx_due_now || rx_prestart_now) {
             uint32_t hop_period = prv_get_hop_period_sec();
             const UI_Config_t* cfg = UI_GetConfig();
             uint32_t cycle_stamp_sec;
+            uint64_t rx_event_centi = rx_due_now ? due_rx : next_rx;
+            uint32_t rx_arm_lead_ms = 0u;
 
-            s_data_freq_hz = UI_RF_GetDataFreqHz((uint32_t)(due_rx / 100u), hop_period, 0u);
+            if ((!rx_due_now) && (rx_event_centi > now_centi)) {
+                rx_arm_lead_ms = (uint32_t)((rx_event_centi - now_centi) * 10u);
+            }
+
+            s_data_freq_hz = UI_RF_GetDataFreqHz((uint32_t)(rx_event_centi / 100u), hop_period, 0u);
             s_slot_cnt = (uint8_t)cfg->max_nodes;
             if (s_test_mode && (s_slot_cnt > UI_TESTMODE_MAX_NODES)) {
                 s_slot_cnt = UI_TESTMODE_MAX_NODES;
@@ -1429,7 +1450,9 @@ void GW_App_Process(void)
             }
             s_slot_idx = 0;
             s_rx_expected_nodes = s_slot_cnt;
-            s_rx_cycle_start_ms = HAL_GetTick();
+            /* s_rx_cycle_start_ms는 실제 arm 시각이 아니라 nominal slot anchor를 유지한다.
+             * 그래서 RX를 미리 arm 해도 slot timeout과 cycle 종료 경계는 원래 20/22/...초 기준으로 계산된다. */
+            s_rx_cycle_start_ms = HAL_GetTick() + rx_arm_lead_ms;
             s_rx_nodes_seen_mask = 0u;
             s_rx_window_deadline_ms = s_rx_cycle_start_ms + ((uint32_t)s_slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
             if (!prv_radio_ready_for_rx()) {
@@ -1502,6 +1525,14 @@ static void prv_schedule_wakeup(void)
 
     next_beacon = prv_next_event_centi(now_centi, beacon_interval, beacon_off);
     next_rx = prv_next_event_centi(now_centi, rx_interval, rx_start);
+    if (next_rx > now_centi) {
+        uint64_t rx_prestart_centi = prv_get_rx_prestart_centi();
+        if ((next_rx - now_centi) > rx_prestart_centi) {
+            next_rx -= rx_prestart_centi;
+        } else {
+            next_rx = now_centi + 1u;
+        }
+    }
     next = (next_beacon < next_rx) ? next_beacon : next_rx;
 
     if (have_reminder) {

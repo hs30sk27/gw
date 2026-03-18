@@ -221,7 +221,13 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 static bool prv_tcp_blocked_by_ble(void)
 {
 #if UI_HAVE_BT_EN
-    return UI_BLE_IsActive();
+    if (!UI_BLE_IsActive()) {
+        return false;
+    }
+    /* TEST START 등으로 BLE를 persistent하게 유지한 상태에서는
+     * 현장 확인용 BLE와 TCP uplink를 동시에 허용한다.
+     * 일반 짧은 BLE 세션만 CAT-M1 TCP와 상호배제를 유지한다. */
+    return !UI_BLE_IsPersistent();
 #else
     return false;
 #endif
@@ -2340,19 +2346,10 @@ static bool prv_node_valid(const GW_NodeRec_t* r)
 
 static uint32_t prv_get_snapshot_node_limit(void)
 {
-    const UI_Config_t* cfg = UI_GetConfig();
-    uint32_t limit = UI_MAX_NODES;
-
-    if (cfg != NULL) {
-        limit = (uint32_t)cfg->max_nodes;
-    }
-    if (limit == 0u) {
-        limit = 1u;
-    }
-    if (limit > UI_MAX_NODES) {
-        limit = UI_MAX_NODES;
-    }
-    return limit;
+    /* TCP payload는 설정값(max_nodes)보다 실제 record 내용을 우선한다.
+     * 최신 설정/명령 반영이 어긋나도 이미 받은 ND 데이터가 서버 payload에서
+     * 사라지지 않도록 record 전체 범위를 스캔한다. */
+    return UI_MAX_NODES;
 }
 
 static bool prv_is_ascii_space(char ch)
