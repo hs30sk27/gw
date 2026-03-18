@@ -108,7 +108,8 @@ int main(void)
 	UI_LPM_BeforeStop_DeInitPeripherals();
 	UI_UART1_TxDma_DeInit();
 	Radio.Sleep();
-//	  HAL_GPIO_WritePin(GPIOB, W25Q128_CS_Pin|CATM1_PWR_Pin, GPIO_PIN_RESET);
+
+	HAL_GPIO_WritePin(GPIOB, W25Q128_CS_Pin|CATM1_PWR_Pin, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
 
@@ -126,6 +127,7 @@ LL_PWR_ClearFlag_C1STOP_C1STB();
 /* USER CODE BEGIN EnterStopMode_3 */
 HAL_PWREx_EnterSTOP1Mode(PWR_STOPENTRY_WFI);
 #endif
+__NOP();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -501,7 +503,7 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, W25Q128_CS_Pin|CATM1_PWR_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, W25Q128_CS_Pin|CATM1_PWR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, PWR_KEY_Pin|LED0_Pin|LED1_Pin|RF_TXEN_Pin

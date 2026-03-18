@@ -96,6 +96,7 @@ static int8_t s_rx_shadow_snr = 0;
 static void prv_schedule_wakeup(void);
 static void prv_requeue_events(uint32_t ev_mask);
 static bool prv_arm_rx_slot(void);
+static bool prv_rearm_current_rx_slot(void);
 static void prv_rx_next_slot(void);
 static bool prv_is_two_minute_mode_active(void);
 static void prv_close_rx_cycle_and_commit(void);
@@ -182,12 +183,20 @@ static void prv_led1_pulse_off_cb(void *context)
     prv_led1(false);
 }
 
-static void prv_led1_pulse_10ms(void)
+static void prv_led1_pulse_ms(uint32_t pulse_ms)
 {
+    if (pulse_ms == 0u) {
+        pulse_ms = 1u;
+    }
     prv_led1(true);
     (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
-    (void)UTIL_TIMER_SetPeriod(&s_tmr_led1_pulse, 10u);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_led1_pulse, pulse_ms);
     (void)UTIL_TIMER_Start(&s_tmr_led1_pulse);
+}
+
+static void prv_led1_pulse_10ms(void)
+{
+    prv_led1_pulse_ms(10u);
 }
 
 static bool prv_radio_ready_for_tx(void)
@@ -941,6 +950,37 @@ static bool prv_arm_rx_slot(void)
     return true;
 }
 
+static bool prv_rearm_current_rx_slot(void)
+{
+    UI_Radio_EnterSleep();
+
+    if (!prv_radio_ready_for_rx()) {
+        s_rx_cycle_minute_test = false;
+        s_rx_cycle_stamp_sec = 0u;
+        s_rx_window_deadline_ms = 0u;
+        s_rx_cycle_start_ms = 0u;
+        s_rx_expected_nodes = 0u;
+        s_rx_nodes_seen_mask = 0u;
+        s_state = GW_STATE_IDLE;
+        UI_LPM_UnlockStop();
+        prv_schedule_wakeup();
+        return false;
+    }
+    if (!prv_arm_rx_slot()) {
+        s_rx_cycle_minute_test = false;
+        s_rx_cycle_stamp_sec = 0u;
+        s_rx_window_deadline_ms = 0u;
+        s_rx_cycle_start_ms = 0u;
+        s_rx_expected_nodes = 0u;
+        s_rx_nodes_seen_mask = 0u;
+        s_state = GW_STATE_IDLE;
+        UI_LPM_UnlockStop();
+        prv_schedule_wakeup();
+        return false;
+    }
+    return true;
+}
+
 static void prv_schedule_after_ms(uint32_t delay_ms)
 {
     if (delay_ms == 0u) {
@@ -1095,14 +1135,16 @@ void GW_App_Process(void)
 
     if ((ev & GW_EVT_RADIO_RX_DONE) != 0u) {
         if (s_state == GW_STATE_RX_SLOTS) {
-            prv_led1_pulse_10ms();
+            bool accepted_node = false;
             UI_NodeData_t nd;
+
             if (UI_Pkt_ParseNodeData(s_rx_shadow, s_rx_shadow_size, &nd)) {
                 if (nd.node_num < UI_MAX_NODES) {
                     const UI_Config_t* cfg = UI_GetConfig();
-                    if (memcmp(nd.net_id, cfg->net_id, UI_NET_ID_LEN) == 0) {
+                    if ((cfg != NULL) && (memcmp(nd.net_id, cfg->net_id, UI_NET_ID_LEN) == 0)) {
                         GW_NodeRec_t* r = &s_hour_rec.nodes[nd.node_num];
                         uint8_t sensor_en_mask = (uint8_t)(nd.sensor_en_mask & UI_SENSOR_EN_ALL);
+
                         r->batt_lvl = nd.batt_lvl;
                         r->temp_c = nd.temp_c;
                         r->x = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.x : (int16_t)0xFFFFu;
@@ -1113,10 +1155,14 @@ void GW_App_Process(void)
                         if (nd.node_num < s_rx_expected_nodes) {
                             prv_rx_note_node_received(nd.node_num);
                         }
+                        accepted_node = true;
                     }
                 }
             }
-            prv_rx_next_slot();
+            if (accepted_node) {
+                prv_led1_pulse_ms(200u);
+            }
+            (void)prv_rearm_current_rx_slot();
         }
         prv_requeue_events(ev & ~(GW_EVT_RADIO_RX_DONE));
         return;
@@ -1140,7 +1186,7 @@ void GW_App_Process(void)
 
     if ((ev & GW_EVT_RADIO_RX_ERROR) != 0u) {
         if (s_state == GW_STATE_RX_SLOTS) {
-            prv_rx_next_slot();
+            (void)prv_rearm_current_rx_slot();
         } else {
             UI_Radio_MarkRecoverNeeded();
             UI_Radio_EnterSleep();
