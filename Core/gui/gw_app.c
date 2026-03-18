@@ -44,13 +44,12 @@ static volatile uint32_t s_evt_flags = 0;
 
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
-#define GW_RX_WINDOW_GUARD_MS   (300u)
+#define GW_RX_WINDOW_GUARD_MS   (1200u)
 #define GW_RX_PRESTART_MS       (500u)
 
 static bool s_test_mode = false;
 static bool s_ble_test_session_active = false;
 static uint16_t s_beacon_counter = 0;
-static uint8_t s_slot_idx = 0;
 static uint8_t s_slot_cnt = 0;
 static uint8_t s_rx_expected_nodes = 0u;
 static uint32_t s_rx_window_deadline_ms = 0u;
@@ -1001,34 +1000,18 @@ static void prv_requeue_events(uint32_t ev_mask)
 static uint32_t prv_get_rx_slot_timeout_ms(void)
 {
     uint32_t now_ms;
-    uint32_t slot_deadline_ms;
+    uint32_t deadline_ms;
 
-    if (s_rx_cycle_start_ms == 0u) {
+    if ((s_rx_cycle_start_ms == 0u) || (s_rx_window_deadline_ms == 0u)) {
         return UI_SLOT_DURATION_MS;
     }
 
     now_ms = HAL_GetTick();
-    slot_deadline_ms = s_rx_cycle_start_ms + (((uint32_t)s_slot_idx + 1u) * UI_SLOT_DURATION_MS);
-    if ((s_rx_window_deadline_ms != 0u) &&
-        ((int32_t)(slot_deadline_ms - s_rx_window_deadline_ms) > 0)) {
-        slot_deadline_ms = s_rx_window_deadline_ms;
-    }
-    if ((int32_t)(slot_deadline_ms - now_ms) <= 0) {
+    deadline_ms = s_rx_window_deadline_ms;
+    if ((int32_t)(deadline_ms - now_ms) <= 0) {
         return 1u;
     }
-    return (slot_deadline_ms - now_ms);
-}
-
-static bool prv_rx_nominal_window_elapsed(void)
-{
-    uint32_t nominal_end_ms;
-
-    if ((s_rx_cycle_start_ms == 0u) || (s_rx_expected_nodes == 0u)) {
-        return false;
-    }
-
-    nominal_end_ms = s_rx_cycle_start_ms + ((uint32_t)s_rx_expected_nodes * UI_SLOT_DURATION_MS);
-    return ((int32_t)(HAL_GetTick() - nominal_end_ms) >= 0);
+    return (deadline_ms - now_ms);
 }
 
 static bool prv_arm_rx_slot(void)
@@ -1233,6 +1216,8 @@ void GW_App_Process(void)
     if ((ev & GW_EVT_RADIO_RX_DONE) != 0u) {
         if (s_state == GW_STATE_RX_SLOTS) {
             bool accepted_node = false;
+            bool expected_node = false;
+            uint64_t seen_bit = 0u;
             UI_NodeData_t nd;
 
             if (UI_Pkt_ParseNodeData(s_rx_shadow, s_rx_shadow_size, &nd)) {
@@ -1249,8 +1234,12 @@ void GW_App_Process(void)
                         r->z = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.z : (int16_t)0xFFFFu;
                         r->adc = ((sensor_en_mask & UI_SENSOR_EN_ADC) != 0u) ? nd.adc : 0xFFFFu;
                         r->pulse_cnt = ((sensor_en_mask & UI_SENSOR_EN_PULSE) != 0u) ? nd.pulse_cnt : 0xFFFFFFFFu;
-                        if (nd.node_num < s_rx_expected_nodes) {
-                            prv_rx_note_node_received(nd.node_num);
+                        if ((nd.node_num < s_rx_expected_nodes) && (nd.node_num < 64u)) {
+                            seen_bit = (1ULL << nd.node_num);
+                            expected_node = true;
+                            if ((s_rx_nodes_seen_mask & seen_bit) == 0u) {
+                                prv_rx_note_node_received(nd.node_num);
+                            }
                         }
                         accepted_node = true;
                     }
@@ -1258,6 +1247,11 @@ void GW_App_Process(void)
             }
             if (accepted_node) {
                 prv_led1_pulse_ms(200u);
+                if (expected_node && prv_rx_all_expected_nodes_seen()) {
+                    prv_close_rx_cycle_and_commit();
+                    prv_requeue_events(ev & ~(GW_EVT_RADIO_RX_DONE));
+                    return;
+                }
             }
             (void)prv_rearm_current_rx_slot();
         }
@@ -1448,13 +1442,15 @@ void GW_App_Process(void)
             if (prv_is_two_minute_mode_active() && (s_slot_cnt > 5u)) {
                 s_slot_cnt = 5u;
             }
-            s_slot_idx = 0;
             s_rx_expected_nodes = s_slot_cnt;
             /* s_rx_cycle_start_ms는 실제 arm 시각이 아니라 nominal slot anchor를 유지한다.
              * 그래서 RX를 미리 arm 해도 slot timeout과 cycle 종료 경계는 원래 20/22/...초 기준으로 계산된다. */
             s_rx_cycle_start_ms = HAL_GetTick() + rx_arm_lead_ms;
             s_rx_nodes_seen_mask = 0u;
             s_rx_window_deadline_ms = s_rx_cycle_start_ms + ((uint32_t)s_slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
+            if (UI_BLE_IsActive()) {
+                UI_BLE_Disable();
+            }
             if (!prv_radio_ready_for_rx()) {
                 prv_schedule_wakeup();
                 return;
@@ -1766,10 +1762,8 @@ static void prv_close_rx_cycle_and_commit(void)
 static void prv_rx_next_slot(void)
 {
     UI_Radio_EnterSleep();
-    s_slot_idx++;
 
-    if (prv_rx_window_expired() ||
-        (prv_rx_all_expected_nodes_seen() && prv_rx_nominal_window_elapsed())) {
+    if (prv_rx_window_expired() || prv_rx_all_expected_nodes_seen()) {
         prv_close_rx_cycle_and_commit();
         return;
     }
