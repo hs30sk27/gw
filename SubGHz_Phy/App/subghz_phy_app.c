@@ -165,10 +165,8 @@ static void OnRxTimeout(void)
 static void OnRxError(void)
 {
   /* USER CODE BEGIN OnRxError */
-	HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_4);
 	Radio.Sleep();
 	GW_Radio_OnRxError();
-	HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_4);
   /* USER CODE END OnRxError */
 }
 
