@@ -108,6 +108,11 @@ static void prv_send_ble_test_report_if_active(const GW_HourRec_t* rec);
 static void prv_start_ble_test_session(void);
 static void prv_stop_ble_test_session(bool disable_ble_now);
 static void prv_get_effective_setting_ascii(uint8_t out_setting_ascii[3]);
+static bool prv_should_try_catm1_uplink_now(uint32_t now_sec);
+static bool prv_flash_head_matches_last_live_uplink(void);
+static void prv_flash_tx_skip_last_live_uplink_head(void);
+static uint32_t prv_flash_tx_pending_count(void);
+static void prv_flash_tx_note_sent(uint32_t sent_count);
 
 static void prv_cancel_pending_beacon_burst(void)
 {
@@ -533,6 +538,47 @@ static void prv_mark_cycle_complete(const GW_HourRec_t* rec)
     s_last_cycle_minute_id = rec->epoch_sec / 60u;
 }
 
+static bool prv_should_try_catm1_uplink_now(uint32_t now_sec)
+{
+    if (!s_catm1_uplink_pending) {
+        return false;
+    }
+    if (s_state != GW_STATE_IDLE) {
+        return false;
+    }
+    if (prv_is_minute_test_active() && ((now_sec % 60u) < 40u)) {
+        return false;
+    }
+    return true;
+}
+
+static bool prv_flash_head_matches_last_live_uplink(void)
+{
+    GW_FileRec_t first_rec;
+    const UI_Config_t* cfg = UI_GetConfig();
+    uint8_t cur_gw_num = (cfg != NULL) ? cfg->gw_num : 0u;
+
+    if (s_last_live_uplink_epoch_sec == 0xFFFFFFFFu) {
+        return false;
+    }
+    if (prv_flash_tx_pending_count() == 0u) {
+        return false;
+    }
+    if (!GW_Storage_ReadRecordByGlobalIndex(s_flash_tx_next_send_index, &first_rec, NULL)) {
+        return false;
+    }
+
+    return ((first_rec.gw_num == cur_gw_num) &&
+            (first_rec.rec.epoch_sec == s_last_live_uplink_epoch_sec));
+}
+
+static void prv_flash_tx_skip_last_live_uplink_head(void)
+{
+    while (prv_flash_head_matches_last_live_uplink()) {
+        prv_flash_tx_note_sent(1u);
+    }
+}
+
 static bool prv_should_prioritize_live_snapshot_over_backlog(const GW_HourRec_t* rec, uint32_t pending)
 {
     uint32_t now_minute_id;
@@ -858,6 +904,7 @@ static bool prv_run_catm1_uplink_now(void)
     }
 
     rec = prv_get_catm1_uplink_record();
+    prv_flash_tx_skip_last_live_uplink_head();
     pending = prv_flash_tx_pending_count();
 
     if (prv_should_prioritize_live_snapshot_over_backlog(rec, pending)) {
@@ -865,6 +912,7 @@ static bool prv_run_catm1_uplink_now(void)
 
         if (sent_ok && (rec != NULL)) {
             s_last_live_uplink_epoch_sec = rec->epoch_sec;
+            prv_flash_tx_skip_last_live_uplink_head();
         }
         s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
         if ((!sent_ok) && s_catm1_uplink_pending) {
@@ -919,6 +967,7 @@ static bool prv_run_catm1_uplink_now(void)
         bool sent_ok = GW_Catm1_SendSnapshot(rec);
         if (sent_ok) {
             s_last_live_uplink_epoch_sec = rec->epoch_sec;
+            prv_flash_tx_skip_last_live_uplink_head();
         }
         s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
         if ((!sent_ok) && s_catm1_uplink_pending) {
@@ -1256,12 +1305,6 @@ void GW_App_Process(void)
         return;
     }
 
-    if (s_catm1_uplink_pending && (s_state == GW_STATE_IDLE)) {
-        if (prv_run_catm1_uplink_now()) {
-            return;
-        }
-    }
-
     if ((ev & GW_EVT_WAKEUP) != 0u) {
         if (s_state != GW_STATE_IDLE) {
             prv_schedule_wakeup();
@@ -1355,7 +1398,7 @@ void GW_App_Process(void)
             return;
         }
 
-        if (s_catm1_uplink_pending && !beacon_due_now && !rx_due_now) {
+        if (prv_should_try_catm1_uplink_now(now_sec) && !beacon_due_now && !rx_due_now) {
             if (prv_run_catm1_uplink_now()) {
                 return;
             }
@@ -1449,17 +1492,6 @@ static void prv_schedule_wakeup(void)
         prv_schedule_after_ms(10u);
         return;
     }
-    if (s_catm1_uplink_pending) {
-        uint32_t now_ms = HAL_GetTick();
-        if ((s_catm1_retry_not_before_ms != 0u) &&
-            ((int32_t)(now_ms - s_catm1_retry_not_before_ms) < 0)) {
-            prv_schedule_after_ms(s_catm1_retry_not_before_ms - now_ms);
-        } else {
-            s_catm1_retry_not_before_ms = 0u;
-            prv_schedule_after_ms(10u);
-        }
-        return;
-    }
 
     beacon_interval = prv_get_beacon_interval_sec();
     beacon_off = prv_get_beacon_offset_sec();
@@ -1494,6 +1526,26 @@ static void prv_schedule_wakeup(void)
         uint64_t next_catm1 = prv_next_event_centi(now_centi, prv_get_catm1_period_sec(), prv_get_catm1_offset_sec());
         if (next_catm1 < next) {
             next = next_catm1;
+        }
+    }
+    if (s_catm1_uplink_pending) {
+        uint64_t next_uplink = 0u;
+        uint32_t now_ms = HAL_GetTick();
+
+        if ((s_catm1_retry_not_before_ms != 0u) &&
+            ((int32_t)(now_ms - s_catm1_retry_not_before_ms) < 0)) {
+            uint32_t wait_ms = s_catm1_retry_not_before_ms - now_ms;
+            uint64_t wait_centi = ((uint64_t)wait_ms + 9u) / 10u;
+            next_uplink = now_centi + ((wait_centi == 0u) ? 1u : wait_centi);
+        } else if (prv_is_minute_test_active() && (((uint32_t)(now_centi / 100u) % 60u) < 40u)) {
+            next_uplink = prv_next_test50_centi(now_centi);
+        } else {
+            s_catm1_retry_not_before_ms = 0u;
+            next_uplink = now_centi + 1u;
+        }
+
+        if (next_uplink < next) {
+            next = next_uplink;
         }
     }
 
