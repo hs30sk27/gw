@@ -102,7 +102,7 @@ int main(void)
   MX_LPUART1_UART_Init();
   MX_ADC_Init();
   /* USER CODE BEGIN 2 */
-
+  UI_UART1_TxDma_DeInit();
   /* USER CODE END 2 */
 
   /* Infinite loop */

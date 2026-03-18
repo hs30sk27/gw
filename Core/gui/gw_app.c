@@ -1247,11 +1247,14 @@ void GW_App_Process(void)
             }
             if (accepted_node) {
                 prv_led1_pulse_ms(200u);
-                if (expected_node && prv_rx_all_expected_nodes_seen()) {
-                    prv_close_rx_cycle_and_commit();
-                    prv_requeue_events(ev & ~(GW_EVT_RADIO_RX_DONE));
-                    return;
-                }
+                /* NOTE: 수신 즉시 조기 종료(early-close)를 하지 않는다.
+                 * max_nodes(s_rx_expected_nodes)보다 node_num이 큰 노드(예: max_nodes=1일 때
+                 * node1)는 expected_node=false로 처리되어 seen_mask에 기록되지 않는다.
+                 * 따라서 node0 수신 직후 early-close가 발생하면 node1의 패킷 수신 슬롯
+                 * (2초 뒤)을 완전히 놓치게 된다.
+                 * 대신 RX 타임아웃 경로(prv_rx_next_slot)에서 window 만료 또는
+                 * prv_rx_all_expected_nodes_seen() 조건으로 사이클을 닫는다.
+                 * 이 방식은 max_nodes 설정과 무관하게 윈도우 내 모든 노드를 수신한다. */
             }
             (void)prv_rearm_current_rx_slot();
         }

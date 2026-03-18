@@ -95,7 +95,7 @@ void PWR_EnterStopMode(void)
   /* USER CODE BEGIN EnterStopMode_1 */
 
   UI_LPM_BeforeStop_DeInitPeripherals();
-  UI_UART1_TxDma_DeInit();
+
 
   /* USER CODE END EnterStopMode_1 */
   HAL_SuspendTick();
