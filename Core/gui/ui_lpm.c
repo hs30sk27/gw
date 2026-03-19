@@ -41,6 +41,18 @@ extern DMA_HandleTypeDef  hdma_usart1_tx;
 #endif
 extern void UI_Radio_EnterSleep(void);
 
+static void prv_abort_peripheral_activity_before_deinit(void)
+{
+#if defined(HAL_UART_MODULE_ENABLED)
+    (void)HAL_UART_Abort(&hlpuart1);
+    (void)HAL_UART_Abort(&huart1);
+#endif
+
+#if defined(HAL_SPI_MODULE_ENABLED)
+    (void)HAL_SPI_Abort(&hspi1);
+#endif
+}
+
 static void prv_force_stop_pin_levels(void)
 {
 #if defined(W25Q128_CS_GPIO_Port) && defined(W25Q128_CS_Pin)
@@ -110,12 +122,12 @@ static void prv_configure_deinited_pins_for_stop(void)
 #endif
 
     /* CATM1 UART TX/RX (AF → analog) */
-//#if defined(CATM1_RX_GPIO_Port) && defined(CATM1_RX_Pin) && (CATM1_RX_GPIO_Port == GPIOA)
+#if defined(CATM1_RX_GPIO_Port) && defined(CATM1_RX_Pin)
     prv_set_gpio_analog(CATM1_RX_GPIO_Port, CATM1_RX_Pin);
-//#endif
-//#if defined(CATM1_TX_GPIO_Port) && defined(CATM1_TX_Pin) && (CATM1_TX_GPIO_Port == GPIOA)
+#endif
+#if defined(CATM1_TX_GPIO_Port) && defined(CATM1_TX_Pin)
     prv_set_gpio_analog(CATM1_TX_GPIO_Port, CATM1_TX_Pin);
-//#endif
+#endif
 
     /* BATT_LVL (PA9): INPUT NOPULL → analog.
      * 플로팅 디지털 입력은 Stop 모드에서 누설 전류의 주요 원인이다.
@@ -123,6 +135,9 @@ static void prv_configure_deinited_pins_for_stop(void)
      * 에서 INPUT으로 복구한다. */
 #if defined(BATT_LVL_GPIO_Port) && defined(BATT_LVL_Pin)
     prv_set_gpio_analog(BATT_LVL_GPIO_Port, BATT_LVL_Pin);
+#endif
+#if defined(TH_GPIO_Port) && defined(TH_Pin)
+    prv_set_gpio_analog(TH_GPIO_Port, TH_Pin);
 #endif
 
     /* ---- GPIOB ---- */
@@ -301,6 +316,7 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
     UI_GPIO_ClearEvents();
     UI_UART_ResetRxBuffer();
     UI_BLE_ClearFlagsBeforeStop();
+    prv_abort_peripheral_activity_before_deinit();
 #if defined(HAL_ADC_MODULE_ENABLED)
     (void)HAL_ADC_Stop(&hadc);
     (void)HAL_ADC_DeInit(&hadc);
@@ -377,11 +393,8 @@ void UI_LPM_EnterStopNow(void)
         return;
     }
 
-    UI_LPM_BeforeStop_DeInitPeripherals();
+    /* 실제 STOP 진입/복귀 정리는 stm32_lpm_if.c의 PowerDriver 콜백에서 수행한다. */
     HAL_SuspendTick();
     UTIL_LPM_EnterLowPower();
     HAL_ResumeTick();
-
-    /* wakeup 후: 기본은 아무 것도 하지 않음(최소 전류) */
-    UI_LPM_AfterStop_ReInitPeripherals();
 }
