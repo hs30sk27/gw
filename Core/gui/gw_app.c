@@ -223,34 +223,6 @@ static bool prv_radio_ready_for_rx(void)
     return true;
 }
 
-static bool prv_buf_is_all_ff(const uint8_t* buf, uint16_t len)
-{
-    if ((buf == NULL) || (len == 0u)) {
-        return false;
-    }
-
-    for (uint16_t i = 0u; i < len; i++) {
-        if (buf[i] != 0xFFu) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool prv_rx_shadow_frame_sane(void)
-{
-    if (s_rx_shadow_size != UI_NODE_PAYLOAD_LEN) {
-        return false;
-    }
-
-    if (prv_buf_is_all_ff(s_rx_shadow, s_rx_shadow_size)) {
-        return false;
-    }
-
-    return true;
-}
-
 static uint8_t prv_pack_gw_volt_x10(uint16_t raw_x10)
 {
     if (raw_x10 == 0xFFFFu) {
@@ -1248,8 +1220,7 @@ void GW_App_Process(void)
             uint64_t seen_bit = 0u;
             UI_NodeData_t nd;
 
-            if (prv_rx_shadow_frame_sane() &&
-                UI_Pkt_ParseNodeData(s_rx_shadow, s_rx_shadow_size, &nd)) {
+            if (UI_Pkt_ParseNodeData(s_rx_shadow, s_rx_shadow_size, &nd)) {
                 if (nd.node_num < UI_MAX_NODES) {
                     const UI_Config_t* cfg = UI_GetConfig();
                     if ((cfg != NULL) && (memcmp(nd.net_id, cfg->net_id, UI_NET_ID_LEN) == 0)) {
@@ -1275,8 +1246,8 @@ void GW_App_Process(void)
                 }
             }
             if (accepted_node) {
-                prv_led1_pulse_ms(200u);
-                /* NOTE: 수신 즉시 조기 종료(early-close)를 하지 않는다.
+                /* RX 수신 시 LED pulse 제거: 수신 경로에서는 LED를 토글하지 않는다.
+                 * NOTE: 수신 즉시 조기 종료(early-close)를 하지 않는다.
                  * max_nodes(s_rx_expected_nodes)보다 node_num이 큰 노드(예: max_nodes=1일 때
                  * node1)는 expected_node=false로 처리되어 seen_mask에 기록되지 않는다.
                  * 따라서 node0 수신 직후 early-close가 발생하면 node1의 패킷 수신 슬롯
@@ -1828,8 +1799,6 @@ static void prv_rx_next_slot(void)
 
 void GW_Radio_OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr)
 {
-    memset(s_rx_shadow, 0, sizeof(s_rx_shadow));
-
     if (size > sizeof(s_rx_shadow)) {
         size = sizeof(s_rx_shadow);
     }

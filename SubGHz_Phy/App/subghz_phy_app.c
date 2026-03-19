@@ -122,7 +122,7 @@ static void prv_toggle_led0_debug(void)
 void SubghzApp_ReInitRadio(void)
 {
   Radio.Init(&RadioEvents);
-  prv_toggle_led0_debug();
+//  prv_toggle_led0_debug();
   Radio.Sleep();
 }
 
