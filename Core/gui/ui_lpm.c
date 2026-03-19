@@ -87,32 +87,72 @@ static void prv_set_gpio_analog(GPIO_TypeDef *port, uint32_t pins)
 static void prv_configure_deinited_pins_for_stop(void)
 {
     /*
-     * 업로드된 기준 파일처럼 stop 직전 deinit된 UART 핀은 analog/no-pull로 내려
-     * 외부 모듈(BLE, CATM1)과 연결된 라인에서 누설 전류가 생기지 않도록 한다.
-     * SPI1 핀도 동일하게 analog로 내려 flash deep power-down 이후 잔류 전류를 줄인다.
+     * Stop 직전 deinit된 UART/SPI 핀과 사용하지 않는 입력 핀을
+     * analog/no-pull로 내려 누설 전류를 차단한다.
+     *
+     * [주의] 핀별 처리 근거:
+     *  - UART(BLE/CATM1), SPI SCK/MOSI/MISO : AF → analog
+     *  - BATT_LVL (PA9) : INPUT + NOPULL → analog
+     *    → 플로팅 디지털 입력은 Schmitt trigger 내부에서
+     *      부정(不定) 전위로 수 μA 이상 소모. 반드시 analog로 내려야 한다.
+     *  - W25Q128_CS (PB8) : OUTPUT_PP + PULLUP → analog
+     *    → GW_Storage_W25Q_PowerDown() 이후 flash는 deep power-down 상태이므로
+     *      CS 레벨 무관. 내부 pull-up 전류를 없애기 위해 analog로 전환한다.
+     *      SPI가 재필요할 때 prv_spi_ensure_ready()에서 핀이 다시 설정된다.
+     *  - BT_EN (PC13) : OUTPUT_PP LOW → OUTPUT 유지
+     *    → BLE 모듈 EN 핀을 직접 구동하므로 analog(플로팅)로 전환하면
+     *      모듈이 의도치 않게 켜질 수 있다. 구동 레벨(LOW)을 유지한다.
      */
+
+    /* ---- GPIOA ---- */
 #if defined(__HAL_RCC_GPIOA_CLK_ENABLE)
     __HAL_RCC_GPIOA_CLK_ENABLE();
 #endif
+
+    /* CATM1 UART TX/RX (AF → analog) */
+//#if defined(CATM1_RX_GPIO_Port) && defined(CATM1_RX_Pin) && (CATM1_RX_GPIO_Port == GPIOA)
+    prv_set_gpio_analog(CATM1_RX_GPIO_Port, CATM1_RX_Pin);
+//#endif
+//#if defined(CATM1_TX_GPIO_Port) && defined(CATM1_TX_Pin) && (CATM1_TX_GPIO_Port == GPIOA)
+    prv_set_gpio_analog(CATM1_TX_GPIO_Port, CATM1_TX_Pin);
+//#endif
+
+    /* BATT_LVL (PA9): INPUT NOPULL → analog.
+     * 플로팅 디지털 입력은 Stop 모드에서 누설 전류의 주요 원인이다.
+     * 복귀 후 HAL_GPIO_ReadPin()이 필요하면 UI_LPM_AfterStop_ReInitPeripherals()
+     * 에서 INPUT으로 복구한다. */
+#if defined(BATT_LVL_GPIO_Port) && defined(BATT_LVL_Pin)
+    prv_set_gpio_analog(BATT_LVL_GPIO_Port, BATT_LVL_Pin);
+#endif
+
+    /* ---- GPIOB ---- */
 #if defined(__HAL_RCC_GPIOB_CLK_ENABLE)
     __HAL_RCC_GPIOB_CLK_ENABLE();
 #endif
 
+    /* BLE UART TX/RX (AF → analog) */
 #if defined(BLE_TX_GPIO_Port) && defined(BLE_TX_Pin)
     prv_set_gpio_analog(BLE_TX_GPIO_Port, BLE_TX_Pin);
 #endif
 #if defined(BLE_RX_GPIO_Port) && defined(BLE_RX_Pin)
     prv_set_gpio_analog(BLE_RX_GPIO_Port, BLE_RX_Pin);
 #endif
-#if defined(CATM1_RX_GPIO_Port) && defined(CATM1_RX_Pin)
-    prv_set_gpio_analog(CATM1_RX_GPIO_Port, CATM1_RX_Pin);
-#endif
-#if defined(CATM1_TX_GPIO_Port) && defined(CATM1_TX_Pin)
-    prv_set_gpio_analog(CATM1_TX_GPIO_Port, CATM1_TX_Pin);
-#endif
+
+    /* SPI1 SCK/MISO/MOSI (PB3/PB4/PB5, AF → analog) */
 #if defined(GPIOB)
     prv_set_gpio_analog(GPIOB, GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5);
 #endif
+
+    /* W25Q128 CS (PB8): OUTPUT_PP+PULLUP → analog.
+     * flash는 이미 deep power-down 상태이므로 CS 레벨 불필요.
+     * 내부 pull-up(~40kΩ)을 제거해 잔류 전류를 차단한다. */
+#if defined(W25Q128_CS_GPIO_Port) && defined(W25Q128_CS_Pin)
+    prv_set_gpio_analog(W25Q128_CS_GPIO_Port, W25Q128_CS_Pin);
+#endif
+
+    /* ---- GPIOC ---- */
+    /* BT_EN (PC13): OUTPUT_PP LOW 유지 → BLE 모듈 구동 안전. analog 전환 생략. */
+    /* GPIOC 클록은 GPIO output retention 이 동작하도록 유지한다. */
 }
 
 static void prv_disable_spi_clock(const SPI_HandleTypeDef *hspi)
@@ -293,7 +333,40 @@ void UI_LPM_AfterStop_ReInitPeripherals(void)
      * 예)
      *  - BLE ON 시점: UI_UART_EnsureStarted() 호출
      *  - 센서 측정 시점: MX_ADC_Init(), MX_SPI1_Init() 등 필요 부분만 호출
+     *
+     * [핀 복구]
+     * BeforeStop에서 analog로 내린 핀 중, 디지털 구동이 필요한 핀만 복구한다.
+     * UART/SPI 핀은 각 모듈의 Ensure 경로에서 MspInit이 재설정하므로 여기서 건드리지 않는다.
      */
+
+    /* W25Q128 CS (PB8): analog → OUTPUT_PP HIGH 복구
+     * SPI 재초기화 전까지 CS HIGH를 보장해 flash 신호선 혼입을 막는다.
+     * pull-up은 OUTPUT HIGH 구동 상태에서 불필요하므로 NOPULL 유지. */
+#if defined(W25Q128_CS_GPIO_Port) && defined(W25Q128_CS_Pin)
+    {
+        GPIO_InitTypeDef g = {0};
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+        g.Pin   = W25Q128_CS_Pin;
+        g.Mode  = GPIO_MODE_OUTPUT_PP;
+        g.Pull  = GPIO_NOPULL;
+        g.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(W25Q128_CS_GPIO_Port, &g);
+        HAL_GPIO_WritePin(W25Q128_CS_GPIO_Port, W25Q128_CS_Pin, GPIO_PIN_SET);
+    }
+#endif
+
+    /* BATT_LVL (PA9): analog → INPUT NOPULL 복구
+     * 다음 사이클에서 HAL_GPIO_ReadPin()이 정상 동작하도록 원래 설정으로 되돌린다. */
+#if defined(BATT_LVL_GPIO_Port) && defined(BATT_LVL_Pin)
+    {
+        GPIO_InitTypeDef g = {0};
+        __HAL_RCC_GPIOA_CLK_ENABLE();
+        g.Pin  = BATT_LVL_Pin;
+        g.Mode = GPIO_MODE_INPUT;
+        g.Pull = GPIO_NOPULL;
+        HAL_GPIO_Init(BATT_LVL_GPIO_Port, &g);
+    }
+#endif
 }
 
 void UI_LPM_EnterStopNow(void)

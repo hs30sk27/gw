@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "radio.h"
+#include "ui_lpm.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -102,6 +103,8 @@ int main(void)
   MX_LPUART1_UART_Init();
   MX_ADC_Init();
   /* USER CODE BEGIN 2 */
+  /* USART1 TX DMA는 미사용 정책 — 부팅 시 1회만 해제.
+   * Stop 진입마다 반복하지 않고 여기서 한 번에 처리한다. */
   UI_UART1_TxDma_DeInit();
   /* USER CODE END 2 */
 

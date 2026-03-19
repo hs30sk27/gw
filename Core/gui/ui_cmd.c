@@ -357,10 +357,6 @@ static void prv_send_setting_read(void)
     /* GW에서는 ND CNT를 노드 개수(1..50) 의미로 사용 */
     (void)snprintf(line, sizeof(line), "ND CNT:%u\r\n", cfg->max_nodes);
     UI_UART_SendString(line);
-//    /* 현장에서는 ND NUM을 마지막 노드 번호(0-based)로 쓰는 경우가 많아 함께 보여준다. */
-//    (void)snprintf(line, sizeof(line), "ND NUM:%u\r\n",
-//                   (unsigned)((cfg->max_nodes > 0u) ? (cfg->max_nodes - 1u) : 0u));
-//    UI_UART_SendString(line);
 
     /* GW 번호(0..2)도 같이 확인 가능하도록 출력 */
     (void)snprintf(line, sizeof(line), "GW NUM:%u\r\n", cfg->gw_num);
@@ -557,30 +553,6 @@ static void prv_process_line_impl(const char* line_in, bool silent)
         if (v <= 2u)
         {
             UI_SetGwNum(v);
-            (void)prv_commit_config_changed();
-        }
-        else
-        {
-            prv_send_error();
-        }
-        return;
-    }
-
-    /* -------------------- ND NUM:xx / GW ND NUM:xx ------ */
-    if ((strncmp(p, "ND NUM:", 7) == 0) || (strncmp(p, "GW ND NUM:", 10) == 0))
-    {
-        const char* q = (strncmp(p, "GW ND NUM:", 10) == 0) ? (p + 10) : (p + 7);
-        uint8_t v = 0;
-        if (prv_parse_u8_dec(q, &v) <= 0)
-        {
-            prv_send_error();
-            return;
-        }
-
-        /* 호환 모드: ND NUM:xx = 마지막 노드 번호(0-based) */
-        if (v < UI_MAX_NODES)
-        {
-            UI_SetMaxNodes((uint8_t)(v + 1u));
             (void)prv_commit_config_changed();
         }
         else

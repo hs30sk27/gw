@@ -4,6 +4,7 @@
 
 #include "radio.h"
 #include "subghz_phy_app.h"
+#include "main.h"
 
 #ifndef UI_RF_LORA_BW_ENUM
 #define UI_RF_LORA_BW_ENUM            (0u)
@@ -111,6 +112,7 @@ bool UI_Radio_PrepareRx(uint8_t payload_len)
     {
         return false;
     }
+
     Radio.SetRxConfig(MODEM_LORA,
                       UI_RF_LORA_BW_ENUM,
                       UI_RF_LORA_SF,
