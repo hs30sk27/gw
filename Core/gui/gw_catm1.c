@@ -2902,6 +2902,32 @@ static void prv_note_failed_snapshot_sent(void)
     s_failed_snapshot_queued_gw_num = 0u;
 }
 
+static bool prv_file_rec_has_same_uplink_key(const GW_FileRec_t* a, const GW_FileRec_t* b)
+{
+    if ((a == NULL) || (b == NULL)) {
+        return false;
+    }
+
+    return ((a->gw_num == b->gw_num) &&
+            (a->rec.epoch_sec == b->rec.epoch_sec));
+}
+
+static bool prv_storage_tail_matches_snapshot(const GW_HourRec_t* rec, uint8_t gw_num)
+{
+    GW_FileRec_t last_rec;
+    uint32_t tail = GW_Storage_GetTotalRecordCount();
+
+    if ((rec == NULL) || (tail == 0u)) {
+        return false;
+    }
+    if (!GW_Storage_ReadRecordByGlobalIndex(tail - 1u, &last_rec, NULL)) {
+        return false;
+    }
+
+    return ((last_rec.gw_num == gw_num) &&
+            (last_rec.rec.epoch_sec == rec->epoch_sec));
+}
+
 static bool prv_store_failed_snapshot_to_flash(const GW_HourRec_t* rec)
 {
     uint32_t before_cnt;
@@ -2929,7 +2955,7 @@ static bool prv_store_failed_snapshot_to_flash(const GW_HourRec_t* rec)
             continue;
         }
         after_cnt = GW_Storage_GetTotalRecordCount();
-        if (after_cnt > before_cnt) {
+        if ((after_cnt > before_cnt) || prv_storage_tail_matches_snapshot(rec, cur_gw_num)) {
             s_failed_snapshot_queued_valid = true;
             s_failed_snapshot_queued_epoch_sec = rec->epoch_sec;
             s_failed_snapshot_queued_gw_num = cur_gw_num;
@@ -3024,10 +3050,13 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
     char payload[UI_CATM1_SERVER_PAYLOAD_MAX + 1u];
     char rsp[UI_CATM1_RX_BUF_SZ];
     GW_FileRec_t file_rec;
+    GW_FileRec_t next_rec;
     bool success = false;
     bool pdp_active = false;
     bool opened = false;
-    uint32_t i;
+    bool sent_any = false;
+    uint32_t cursor;
+    uint32_t range_end;
 
     if (out_sent_count != NULL) {
         *out_sent_count = 0u;
@@ -3066,15 +3095,33 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
     }
     opened = true;
 
-    for (i = 0u; i < max_count; i++) {
+    range_end = first_rec_index + max_count;
+    cursor = first_rec_index;
+    while (cursor < range_end) {
+        uint32_t run_end = cursor + 1u;
         size_t len;
 
         if (prv_tcp_blocked_by_ble()) {
             break;
         }
-        if (!GW_Storage_ReadRecordByGlobalIndex(first_rec_index + i, &file_rec, NULL)) {
+        if (!GW_Storage_ReadRecordByGlobalIndex(cursor, &file_rec, NULL)) {
             break;
         }
+
+        /* 같은 gw/epoch가 flash에 연속 저장돼 있으면 마지막 것만 보내고,
+         * out_sent_count는 consume한 storage index 수로 반환해서 caller가
+         * pointer를 한 번에 넘기도록 한다. */
+        while (run_end < range_end) {
+            if (!GW_Storage_ReadRecordByGlobalIndex(run_end, &next_rec, NULL)) {
+                break;
+            }
+            if (!prv_file_rec_has_same_uplink_key(&file_rec, &next_rec)) {
+                break;
+            }
+            file_rec = next_rec;
+            run_end++;
+        }
+
         len = prv_build_snapshot_payload(&file_rec.rec, payload, sizeof(payload));
         if (len == 0u) {
             break;
@@ -3082,13 +3129,15 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         if (!prv_send_tcp_payload(payload)) {
             break;
         }
-        if ((*out_sent_count) == 0u) {
+        if (!sent_any) {
             prv_receive_server_cmd_after_first_payload();
         }
-        (*out_sent_count)++;
+        sent_any = true;
+        *out_sent_count = (run_end - first_rec_index);
         prv_note_failed_snapshot_sent();
+        cursor = run_end;
     }
-    success = ((*out_sent_count) > 0u);
+    success = sent_any;
 
 cleanup:
     prv_close_tcp_and_force_power_cut(opened, rsp, sizeof(rsp));

@@ -113,6 +113,7 @@ static bool prv_flash_head_matches_last_live_uplink(void);
 static void prv_flash_tx_skip_last_live_uplink_head(void);
 static uint32_t prv_flash_tx_pending_count(void);
 static void prv_flash_tx_note_sent(uint32_t sent_count);
+static bool prv_flash_tail_matches_rec(const GW_HourRec_t* rec);
 
 static void prv_cancel_pending_beacon_burst(void)
 {
@@ -586,23 +587,14 @@ static void prv_flash_tx_skip_last_live_uplink_head(void)
 
 static bool prv_should_prioritize_live_snapshot_over_backlog(const GW_HourRec_t* rec, uint32_t pending)
 {
-    uint32_t now_minute_id;
+    (void)rec;
+    (void)pending;
 
-    if ((rec == NULL) || (pending == 0u) || !s_last_cycle_valid) {
-        return false;
-    }
-    if (!prv_is_minute_test_active()) {
-        return false;
-    }
-    if (rec->epoch_sec != s_last_cycle_rec.epoch_sec) {
-        return false;
-    }
-    if (s_last_live_uplink_epoch_sec == rec->epoch_sec) {
-        return false;
-    }
-
-    now_minute_id = UI_Time_NowSec2016() / 60u;
-    return (s_last_cycle_minute_id == now_minute_id);
+    /* backlog가 하나라도 남아 있으면 oldest -> latest 순서로 flash에서만 전송한다.
+     * live snapshot을 backlog보다 먼저 보내면, 이후 재연결에서 이전 flash backlog가 뒤늦게
+     * 재전송되면서 체감상 "최신을 먼저 보내고, 끊긴 뒤 예전 데이터를 다시 보낸다"는
+     * 현상이 생긴다. */
+    return false;
 }
 
 static uint32_t prv_flash_tx_clamp_floor_to_boot_tail(uint32_t floor_index)
@@ -718,6 +710,12 @@ static bool prv_save_hour_rec_verified(const GW_HourRec_t* rec)
         }
         after_cnt = GW_Storage_GetTotalRecordCount();
         if (after_cnt > before_cnt) {
+            return true;
+        }
+        /* 저장 성공 후 count 증가 반영이 늦거나, 같은 epoch 레코드가 이미 tail에 있는 경우에는
+         * 재시도 저장을 하지 말고 tail match로 성공으로 본다. 그렇지 않으면 동일 minute record가
+         * flash에 연속으로 두 번 쌓일 수 있다. */
+        if (prv_flash_tail_matches_rec(rec)) {
             return true;
         }
     }
