@@ -26,6 +26,9 @@ void GW_App_Init(void);
 /* 단일 task 모드에서 UI_MAIN에서 호출하여 이벤트를 처리 */
 void GW_App_Process(void);
 
+/* BLE END/KEY로 강제 stop 진입할 때 GW 주기 wake source를 정리 */
+void GW_App_PrepareForDormantStop(void);
+
 /* Radio event에서 호출 (subghz_phy_app.c USER CODE에 삽입) */
 void GW_Radio_OnTxDone(void);
 void GW_Radio_OnTxTimeout(void);

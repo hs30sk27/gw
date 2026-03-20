@@ -2,6 +2,7 @@
 #include "ui_conf.h"
 #include "ui_lpm.h"
 #include "ui_uart.h"
+#include "gw_app.h"
 #include "gw_catm1.h"
 #include "stm32_timer.h"
 #include "stm32_seq.h"
@@ -191,6 +192,7 @@ void UI_BLE_Process(void)
     if ((ev & BLE_EVT_STOP_REQ) != 0u)
     {
         UI_BLE_Disable();
+        GW_App_PrepareForDormantStop();
         UI_LPM_EnterStopNow();
         return;
     }
@@ -205,6 +207,7 @@ void UI_BLE_Process(void)
         else
         {
             UI_BLE_Disable();
+            GW_App_PrepareForDormantStop();
             UI_LPM_EnterStopNow();
             /* 다른 이벤트(LED 정리 등)도 처리할 수 있으므로 return 하지 않음 */
         }

@@ -82,6 +82,7 @@ static uint32_t s_beacon_burst_gap_ms = 0u;
 static uint32_t s_sync_wait_deadline_ms = 0u;
 static bool s_led1_sync_blink_active = false;
 static bool s_led1_sync_blink_on = false;
+static bool s_dormant_stop_mode = false;
 
 #define GW_BEACON_BURST_COUNT_NORMAL   (3u)
 #define GW_BEACON_BURST_COUNT_RECOVERY (5u)
@@ -135,6 +136,7 @@ static bool prv_flash_head_matches_last_live_uplink(void);
 static void prv_flash_tx_skip_last_live_uplink_head(void);
 static uint32_t prv_flash_tx_pending_count(void);
 static void prv_flash_tx_note_sent(uint32_t sent_count);
+static void prv_exit_dormant_stop_mode(void);
 
 static void prv_cancel_pending_beacon_burst(void)
 {
@@ -142,6 +144,35 @@ static void prv_cancel_pending_beacon_burst(void)
     s_beacon_burst_anchor_sec = 0u;
     s_beacon_burst_gap_ms = 0u;
     s_beacon_oneshot_pending = false;
+}
+
+static void prv_exit_dormant_stop_mode(void)
+{
+    if (!s_dormant_stop_mode) {
+        return;
+    }
+
+    s_dormant_stop_mode = false;
+    s_evt_flags = 0u;
+}
+
+void GW_App_PrepareForDormantStop(void)
+{
+    if (!s_inited) {
+        return;
+    }
+
+    s_dormant_stop_mode = true;
+    s_sync_wait_deadline_ms = 0u;
+    s_evt_flags = 0u;
+    s_ble_test_session_active = false;
+    (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
+    (void)UTIL_TIMER_Stop(&s_tmr_ble_test_expire);
+    prv_led1_sync_blink_stop();
+    prv_cancel_pending_beacon_burst();
+    prv_abort_active_radio_session();
+    prv_reset_rx_cycle_state();
+    UI_Radio_EnterSleep();
 }
 
 static void prv_tmr_ble_test_expire_cb(void *context)
@@ -1407,6 +1438,11 @@ void GW_App_Process(void)
         return;
     }
 
+    if (s_dormant_stop_mode) {
+        s_evt_flags = 0u;
+        return;
+    }
+
     uint32_t ev = s_evt_flags;
 
     if (s_sync_wait_deadline_ms != 0u) {
@@ -1837,6 +1873,9 @@ static void prv_schedule_wakeup(void)
     if (s_sync_wait_deadline_ms != 0u) {
         return;
     }
+    if (s_dormant_stop_mode) {
+        return;
+    }
 
     prv_update_test_mode();
     now_centi = UI_Time_NowCenti2016();
@@ -1960,6 +1999,7 @@ void GW_App_Init(void)
     s_sync_wait_deadline_ms = 0u;
     s_led1_sync_blink_active = false;
     s_led1_sync_blink_on = false;
+    s_dormant_stop_mode = false;
     /* MCU 부팅 시 SIM7080 초기 설정(1NCE APN 포함)을 수행하고
      * 모뎀 시간도 즉시 읽어 보정한다. */
     s_boot_time_sync_pending = true;
@@ -1974,6 +2014,7 @@ void UI_Hook_OnConfigChanged(void)
     if (!s_inited) {
         return;
     }
+    prv_exit_dormant_stop_mode();
     prv_cancel_pending_beacon_burst();
     s_catm1_uplink_pending = false;
     s_catm1_retry_not_before_ms = 0u;
@@ -1992,6 +2033,7 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
     if (!s_inited) {
         return;
     }
+    prv_exit_dormant_stop_mode();
     s_last_save_minute_id = 0xFFFFFFFFu;
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
@@ -2009,6 +2051,7 @@ void UI_Hook_OnTimeChanged(void)
     if (!s_inited) {
         return;
     }
+    prv_exit_dormant_stop_mode();
     prv_cancel_pending_beacon_burst();
     s_catm1_uplink_pending = false;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
@@ -2024,6 +2067,7 @@ void UI_Hook_OnTestStartRequested(void)
         return;
     }
 
+    prv_exit_dormant_stop_mode();
     prv_start_ble_test_session();
     if (s_last_cycle_valid) {
         prv_send_ble_test_report_if_active(&s_last_cycle_rec);
@@ -2037,6 +2081,7 @@ void UI_Hook_OnBeaconOnceRequested(void)
     if (!s_inited) {
         return;
     }
+    prv_exit_dormant_stop_mode();
     prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
     s_evt_flags |= GW_EVT_BEACON_ONESHOT;
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
@@ -2044,6 +2089,7 @@ void UI_Hook_OnBeaconOnceRequested(void)
 
 bool UI_Hook_OnSyncRequested(uint16_t duration_hours)
 {
+    prv_exit_dormant_stop_mode();
     return prv_start_sync_wait_mode(duration_hours);
 }
 
