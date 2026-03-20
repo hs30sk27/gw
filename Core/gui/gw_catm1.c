@@ -643,6 +643,44 @@ static void prv_power_leds_blink_twice(void)
     }
 }
 
+static void prv_catm1_uart_pins_to_analog(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+#if defined(CATM1_RX_GPIO_Port) && defined(CATM1_RX_Pin)
+    GPIO_InitStruct.Pin = CATM1_RX_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(CATM1_RX_GPIO_Port, &GPIO_InitStruct);
+#endif
+#if defined(CATM1_TX_GPIO_Port) && defined(CATM1_TX_Pin)
+    GPIO_InitStruct.Pin = CATM1_TX_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(CATM1_TX_GPIO_Port, &GPIO_InitStruct);
+#endif
+}
+
+static void prv_lpuart_force_idle_low_power(void)
+{
+#if defined(PWR_KEY_Pin)
+    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
+#endif
+
+    if ((hlpuart1.gState != HAL_UART_STATE_RESET) || (hlpuart1.RxState != HAL_UART_STATE_RESET)) {
+#if defined(HAL_UART_MODULE_ENABLED)
+        (void)HAL_UART_Abort(&hlpuart1);
+#endif
+        (void)HAL_UART_DeInit(&hlpuart1);
+    }
+
+    prv_catm1_uart_pins_to_analog();
+
+#if defined(LPUART1_IRQn)
+    HAL_NVIC_ClearPendingIRQ(LPUART1_IRQn);
+#endif
+}
+
 static bool prv_lpuart_is_inited(void)
 {
     return ((hlpuart1.gState != HAL_UART_STATE_RESET) || (hlpuart1.RxState != HAL_UART_STATE_RESET));
@@ -667,9 +705,7 @@ static bool prv_lpuart_ensure(void)
 
 static void prv_lpuart_release(void)
 {
-    if (prv_lpuart_is_inited()) {
-        (void)HAL_UART_DeInit(&hlpuart1);
-    }
+    prv_lpuart_force_idle_low_power();
     if (s_catm1_rb_ready) {
         prv_catm1_rb_reset();
     }
@@ -1850,6 +1886,7 @@ static void prv_finish_power_off_state(void)
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
     s_catm1_bandcfg_applied_this_power = false;
+    prv_lpuart_release();
     s_catm1_last_poweroff_ms = HAL_GetTick();
 }
 

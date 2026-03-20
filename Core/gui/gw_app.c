@@ -99,6 +99,10 @@ static bool s_dormant_stop_mode = false;
 #define GW_CATM1_RETRY_DELAY_MS        (60000u)
 #endif
 
+#ifndef GW_CATM1_PENDING_POLL_MS
+#define GW_CATM1_PENDING_POLL_MS       (1000u)
+#endif
+
 static uint8_t s_beacon_tx_payload[UI_BEACON_PAYLOAD_LEN];
 static uint8_t s_rx_shadow[UI_NODE_PAYLOAD_LEN];
 static uint16_t s_rx_shadow_size = 0u;
@@ -1939,8 +1943,10 @@ static void prv_schedule_wakeup(void)
         } else if (prv_is_minute_test_active() && (((uint32_t)(now_centi / 100u) % 60u) < 40u)) {
             next_uplink = prv_next_test50_centi(now_centi);
         } else {
+            uint64_t poll_centi = ((uint64_t)GW_CATM1_PENDING_POLL_MS + 9u) / 10u;
+
             s_catm1_retry_not_before_ms = 0u;
-            next_uplink = now_centi + 1u;
+            next_uplink = now_centi + ((poll_centi == 0u) ? 1u : poll_centi);
         }
 
         if (next_uplink < next) {

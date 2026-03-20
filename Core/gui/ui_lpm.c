@@ -61,9 +61,9 @@ static void prv_force_stop_pin_levels(void)
 #if defined(CATM1_PWR_GPIO_Port) && defined(CATM1_PWR_Pin)
     HAL_GPIO_WritePin(CATM1_PWR_GPIO_Port, CATM1_PWR_Pin, GPIO_PIN_RESET);
 #endif
-//#if defined(PWR_KEY_GPIO_Port) && defined(PWR_KEY_Pin)
-//    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
-//#endif
+#if defined(PWR_KEY_GPIO_Port) && defined(PWR_KEY_Pin)
+    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
+#endif
 #if defined(BT_EN_GPIO_Port) && defined(BT_EN_Pin)
     HAL_GPIO_WritePin(BT_EN_GPIO_Port, BT_EN_Pin, GPIO_PIN_RESET);
 #endif
@@ -161,9 +161,9 @@ static void prv_configure_deinited_pins_for_stop(void)
     /* W25Q128 CS (PB8): OUTPUT_PP+PULLUP → analog.
      * flash는 이미 deep power-down 상태이므로 CS 레벨 불필요.
      * 내부 pull-up(~40kΩ)을 제거해 잔류 전류를 차단한다. */
-//#if defined(W25Q128_CS_GPIO_Port) && defined(W25Q128_CS_Pin)
-//    prv_set_gpio_analog(W25Q128_CS_GPIO_Port, W25Q128_CS_Pin);
-//#endif
+#if defined(W25Q128_CS_GPIO_Port) && defined(W25Q128_CS_Pin)
+    prv_set_gpio_analog(W25Q128_CS_GPIO_Port, W25Q128_CS_Pin);
+#endif
 
     /* ---- GPIOC ---- */
     /* BT_EN (PC13): OUTPUT_PP LOW 유지 → BLE 모듈 구동 안전. analog 전환 생략. */
@@ -237,6 +237,40 @@ static void prv_disable_adc_clock(const ADC_HandleTypeDef *hadc_ptr)
         return;
     }
 # endif
+#endif
+}
+
+static void prv_clear_pending_irq_sources_before_stop(void)
+{
+#if defined(__HAL_GPIO_EXTI_CLEAR_IT)
+# if defined(PULSE_IN_Pin)
+    __HAL_GPIO_EXTI_CLEAR_IT(PULSE_IN_Pin);
+# endif
+# if defined(OP_KEY_Pin)
+    __HAL_GPIO_EXTI_CLEAR_IT(OP_KEY_Pin);
+# endif
+# if defined(TEST_KEY_Pin)
+    __HAL_GPIO_EXTI_CLEAR_IT(TEST_KEY_Pin);
+# endif
+#endif
+
+#if defined(DMA1_Channel2_IRQn)
+    HAL_NVIC_ClearPendingIRQ(DMA1_Channel2_IRQn);
+#endif
+#if defined(EXTI9_5_IRQn)
+    HAL_NVIC_ClearPendingIRQ(EXTI9_5_IRQn);
+#endif
+#if defined(USART1_IRQn)
+    HAL_NVIC_ClearPendingIRQ(USART1_IRQn);
+#endif
+#if defined(LPUART1_IRQn)
+    HAL_NVIC_ClearPendingIRQ(LPUART1_IRQn);
+#endif
+#if defined(EXTI15_10_IRQn)
+    HAL_NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
+#endif
+#if defined(SUBGHZ_Radio_IRQn)
+    HAL_NVIC_ClearPendingIRQ(SUBGHZ_Radio_IRQn);
 #endif
 }
 
@@ -339,6 +373,8 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
 #endif
 
     prv_configure_deinited_pins_for_stop();
+    /* stop 직전 남아 있는 EXTI/UART/radio NVIC pending을 비워 즉시 재기상 방지 */
+    prv_clear_pending_irq_sources_before_stop();
 }
 
 void UI_LPM_AfterStop_ReInitPeripherals(void)
