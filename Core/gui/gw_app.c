@@ -80,6 +80,8 @@ static uint8_t s_beacon_burst_remaining = 0u;
 static uint32_t s_beacon_burst_anchor_sec = 0u;
 static uint32_t s_beacon_burst_gap_ms = 0u;
 static uint32_t s_sync_wait_deadline_ms = 0u;
+static bool s_led1_sync_blink_active = false;
+static bool s_led1_sync_blink_on = false;
 
 #define GW_BEACON_BURST_COUNT_NORMAL   (3u)
 #define GW_BEACON_BURST_COUNT_RECOVERY (5u)
@@ -88,7 +90,9 @@ static uint32_t s_sync_wait_deadline_ms = 0u;
 #define GW_BEACON_REMINDER_GAP_MS      (200u)
 #define GW_SYNC_WAIT_RX_CHUNK_MS       (5000u)
 #define GW_SYNC_REQUEST_NODE_NUM       (0xAAu)
-#define GW_SYNC_WAIT_MAX_HOURS         (596u)
+#define GW_SYNC_WAIT_MAX_HOURS         (8u)
+#define GW_SYNC_LED1_ON_MS             (200u)
+#define GW_SYNC_LED1_OFF_MS            (500u)
 
 #ifndef GW_CATM1_RETRY_DELAY_MS
 #define GW_CATM1_RETRY_DELAY_MS        (60000u)
@@ -114,6 +118,8 @@ static bool prv_start_sync_response_beacon_tx(void);
 static bool prv_is_sync_request_payload(const uint8_t *payload, uint16_t size);
 static void prv_continue_sync_wait_or_stop(void);
 static void prv_finish_sync_wait_and_stop(void);
+static void prv_cleanup_sync_wait_context(void);
+static void prv_cancel_sync_wait_and_resume_ble(void);
 static bool prv_start_sync_wait_mode(uint16_t duration_hours);
 static bool prv_is_two_minute_mode_active(void);
 static void prv_close_rx_cycle_and_commit(void);
@@ -199,14 +205,46 @@ static void prv_led1(bool on)
 #endif
 }
 
+static void prv_led1_sync_blink_stop(void)
+{
+    s_led1_sync_blink_active = false;
+    s_led1_sync_blink_on = false;
+    (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
+    prv_led1(false);
+}
+
+static void prv_led1_sync_blink_start(void)
+{
+    s_led1_sync_blink_active = true;
+    s_led1_sync_blink_on = true;
+    prv_led1(true);
+    (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_led1_pulse, GW_SYNC_LED1_ON_MS);
+    (void)UTIL_TIMER_Start(&s_tmr_led1_pulse);
+}
+
 static void prv_led1_pulse_off_cb(void *context)
 {
     (void)context;
+
+    if (s_led1_sync_blink_active) {
+        uint32_t next_ms;
+
+        s_led1_sync_blink_on = !s_led1_sync_blink_on;
+        prv_led1(s_led1_sync_blink_on);
+        next_ms = s_led1_sync_blink_on ? GW_SYNC_LED1_ON_MS : GW_SYNC_LED1_OFF_MS;
+        (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
+        (void)UTIL_TIMER_SetPeriod(&s_tmr_led1_pulse, next_ms);
+        (void)UTIL_TIMER_Start(&s_tmr_led1_pulse);
+        return;
+    }
+
     prv_led1(false);
 }
 
 static void prv_led1_pulse_ms(uint32_t pulse_ms)
 {
+    prv_led1_sync_blink_stop();
     if (pulse_ms == 0u) {
         pulse_ms = 1u;
     }
@@ -1181,6 +1219,7 @@ static bool prv_arm_sync_wait_rx(void)
         return false;
     }
 
+    prv_led1_sync_blink_start();
     UI_LPM_LockStop();
     s_state = GW_STATE_SYNC_WAIT_RX;
     Radio.SetChannel(UI_RF_GetBeaconFreqHz());
@@ -1212,6 +1251,7 @@ static bool prv_is_sync_request_payload(const uint8_t *payload, uint16_t size)
 
 static bool prv_start_sync_response_beacon_tx(void)
 {
+    prv_led1_sync_blink_stop();
     UI_Radio_MarkRecoverNeeded();
     if (!prv_start_beacon_tx(UI_Time_NowSec2016())) {
         return false;
@@ -1221,10 +1261,16 @@ static bool prv_start_sync_response_beacon_tx(void)
     return true;
 }
 
-static void prv_finish_sync_wait_and_stop(void)
+static void prv_cleanup_sync_wait_context(void)
 {
     s_sync_wait_deadline_ms = 0u;
+    (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
     prv_cancel_pending_beacon_burst();
+    s_evt_flags &= ~(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
+                     GW_EVT_RADIO_TX_DONE | GW_EVT_RADIO_TX_TIMEOUT |
+                     GW_EVT_RADIO_RX_DONE | GW_EVT_RADIO_RX_TIMEOUT |
+                     GW_EVT_RADIO_RX_ERROR | GW_EVT_BLE_TEST_EXPIRE);
+    prv_led1_sync_blink_stop();
 
     if ((s_state == GW_STATE_SYNC_WAIT_RX) || (s_state == GW_STATE_SYNC_WAIT_TX)) {
         UI_Radio_EnterSleep();
@@ -1233,11 +1279,25 @@ static void prv_finish_sync_wait_and_stop(void)
     }
 
     prv_reset_rx_cycle_state();
+}
+
+static void prv_finish_sync_wait_and_stop(void)
+{
+    prv_cleanup_sync_wait_context();
     UI_BLE_SetPersistent(false);
     if (UI_BLE_IsActive()) {
         UI_BLE_Disable();
     }
     UI_LPM_EnterStopNow();
+}
+
+static void prv_cancel_sync_wait_and_resume_ble(void)
+{
+    prv_cleanup_sync_wait_context();
+    UI_BLE_SetPersistent(false);
+    UI_BLE_EnableForMs(UI_BLE_ACTIVE_MS);
+    UI_BLE_EnsureSerialReady();
+    prv_schedule_wakeup();
 }
 
 static void prv_continue_sync_wait_or_stop(void)
@@ -1256,7 +1316,6 @@ static bool prv_start_sync_wait_mode(uint16_t duration_hours)
 {
     uint64_t duration_ms64;
     uint32_t duration_ms;
-    uint32_t ble_hold_ms;
 
     if ((!s_inited) || (duration_hours == 0u) ||
         (duration_hours > GW_SYNC_WAIT_MAX_HOURS)) {
@@ -1271,26 +1330,28 @@ static bool prv_start_sync_wait_mode(uint16_t duration_hours)
     duration_ms = (uint32_t)duration_ms64;
 
     prv_stop_ble_test_session(false);
+    UI_BLE_SetPersistent(false);
+    if (UI_BLE_IsActive()) {
+        UI_BLE_Disable();
+    }
     (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
     prv_cancel_pending_beacon_burst();
     s_evt_flags &= ~(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
                      GW_EVT_RADIO_TX_DONE | GW_EVT_RADIO_TX_TIMEOUT |
                      GW_EVT_RADIO_RX_DONE | GW_EVT_RADIO_RX_TIMEOUT |
-                     GW_EVT_RADIO_RX_ERROR);
+                     GW_EVT_RADIO_RX_ERROR | GW_EVT_BLE_TEST_EXPIRE);
+    prv_led1_sync_blink_stop();
 
     prv_abort_active_radio_session();
     s_sync_wait_deadline_ms = HAL_GetTick() + duration_ms;
 
-    if (UI_BLE_IsActive()) {
-        ble_hold_ms = duration_ms + 2000u;
-        if (ble_hold_ms < UI_BLE_ACTIVE_MS) {
-            ble_hold_ms = UI_BLE_ACTIVE_MS;
-        }
-        UI_BLE_EnableForMs(ble_hold_ms);
-        UI_BLE_EnsureSerialReady();
+    if (!prv_arm_sync_wait_rx()) {
+        prv_cleanup_sync_wait_context();
+        prv_schedule_wakeup();
+        return false;
     }
 
-    return prv_arm_sync_wait_rx();
+    return true;
 }
 
 static bool prv_start_beacon_tx(uint32_t now_sec)
@@ -1897,6 +1958,8 @@ void GW_App_Init(void)
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     s_sync_wait_deadline_ms = 0u;
+    s_led1_sync_blink_active = false;
+    s_led1_sync_blink_on = false;
     /* MCU 부팅 시 SIM7080 초기 설정(1NCE APN 포함)을 수행하고
      * 모뎀 시간도 즉시 읽어 보정한다. */
     s_boot_time_sync_pending = true;
@@ -1982,6 +2045,16 @@ void UI_Hook_OnBeaconOnceRequested(void)
 bool UI_Hook_OnSyncRequested(uint16_t duration_hours)
 {
     return prv_start_sync_wait_mode(duration_hours);
+}
+
+bool UI_Hook_OnBleStartRequested(void)
+{
+    if ((!s_inited) || (s_sync_wait_deadline_ms == 0u)) {
+        return false;
+    }
+
+    prv_cancel_sync_wait_and_resume_ble();
+    return true;
 }
 
 void GW_Radio_OnTxDone(void)

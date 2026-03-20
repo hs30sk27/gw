@@ -18,6 +18,7 @@
 /* Hook functions (ND/GW에서 override 가능)                                     */
 /* -------------------------------------------------------------------------- */
 __weak void UI_Hook_OnOpKeyPressed(void) {}
+__weak bool UI_Hook_OnBleStartRequested(void) { return false; }
 
 /* -------------------------------------------------------------------------- */
 /* UART 명령 수신 파서 ("<CMD>CRLF" only)                                     */
@@ -164,7 +165,7 @@ static void UI_TaskMain(void)
         {
             UI_BLE_RequestStopNow();
         }
-        else
+        else if (!UI_Hook_OnBleStartRequested())
         {
             UI_BLE_EnableForMs(UI_BLE_ACTIVE_MS);
         }

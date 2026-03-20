@@ -133,9 +133,9 @@ static void prv_configure_deinited_pins_for_stop(void)
      * 플로팅 디지털 입력은 Stop 모드에서 누설 전류의 주요 원인이다.
      * 복귀 후 HAL_GPIO_ReadPin()이 필요하면 UI_LPM_AfterStop_ReInitPeripherals()
      * 에서 INPUT으로 복구한다. */
-#if defined(BATT_LVL_GPIO_Port) && defined(BATT_LVL_Pin)
-    prv_set_gpio_analog(BATT_LVL_GPIO_Port, BATT_LVL_Pin);
-#endif
+//#if defined(BATT_LVL_GPIO_Port) && defined(BATT_LVL_Pin)
+//    prv_set_gpio_analog(BATT_LVL_GPIO_Port, BATT_LVL_Pin);
+//#endif
 #if defined(TH_GPIO_Port) && defined(TH_Pin)
     prv_set_gpio_analog(TH_GPIO_Port, TH_Pin);
 #endif
@@ -307,8 +307,7 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
      * 남아 있지 않도록 한다.
      */
 
-    GW_Storage_W25Q_PowerOn();
-    __NOP();
+
     GW_Storage_W25Q_PowerDown();
 
     /* 외부 부하가 남지 않도록 제어 핀을 저전력 상태로 고정 */
