@@ -129,6 +129,7 @@ void PWR_ExitStopMode(void)
   vcom_Resume();
   /* USER CODE BEGIN ExitStopMode_2 */
 #endif
+  __NOP();
   SystemClock_Config();
   HAL_ResumeTick();
   UI_LPM_AfterStop_ReInitPeripherals();

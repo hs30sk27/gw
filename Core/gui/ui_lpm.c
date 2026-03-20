@@ -55,15 +55,15 @@ static void prv_abort_peripheral_activity_before_deinit(void)
 
 static void prv_force_stop_pin_levels(void)
 {
-#if defined(W25Q128_CS_GPIO_Port) && defined(W25Q128_CS_Pin)
-    HAL_GPIO_WritePin(W25Q128_CS_GPIO_Port, W25Q128_CS_Pin, GPIO_PIN_SET);
-#endif
+//#if defined(W25Q128_CS_GPIO_Port) && defined(W25Q128_CS_Pin)
+//    HAL_GPIO_WritePin(W25Q128_CS_GPIO_Port, W25Q128_CS_Pin, GPIO_PIN_SET);
+//#endif
 #if defined(CATM1_PWR_GPIO_Port) && defined(CATM1_PWR_Pin)
     HAL_GPIO_WritePin(CATM1_PWR_GPIO_Port, CATM1_PWR_Pin, GPIO_PIN_RESET);
 #endif
-#if defined(PWR_KEY_GPIO_Port) && defined(PWR_KEY_Pin)
-    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
-#endif
+//#if defined(PWR_KEY_GPIO_Port) && defined(PWR_KEY_Pin)
+//    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
+//#endif
 #if defined(BT_EN_GPIO_Port) && defined(BT_EN_Pin)
     HAL_GPIO_WritePin(BT_EN_GPIO_Port, BT_EN_Pin, GPIO_PIN_RESET);
 #endif
@@ -306,6 +306,9 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
      * stop 직전에도 한 번 더 내려서 SPI DeInit 이후 flash가 standby 전류로
      * 남아 있지 않도록 한다.
      */
+
+    GW_Storage_W25Q_PowerOn();
+    __NOP();
     GW_Storage_W25Q_PowerDown();
 
     /* 외부 부하가 남지 않도록 제어 핀을 저전력 상태로 고정 */

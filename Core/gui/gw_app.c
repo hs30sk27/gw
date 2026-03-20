@@ -88,6 +88,7 @@ static uint32_t s_sync_wait_deadline_ms = 0u;
 #define GW_BEACON_REMINDER_GAP_MS      (200u)
 #define GW_SYNC_WAIT_RX_CHUNK_MS       (5000u)
 #define GW_SYNC_REQUEST_NODE_NUM       (0xAAu)
+#define GW_SYNC_WAIT_MAX_HOURS         (596u)
 
 #ifndef GW_CATM1_RETRY_DELAY_MS
 #define GW_CATM1_RETRY_DELAY_MS        (60000u)
@@ -110,9 +111,10 @@ static void prv_abort_active_radio_session(void);
 static uint32_t prv_get_sync_wait_remaining_ms(void);
 static bool prv_arm_sync_wait_rx(void);
 static bool prv_start_sync_response_beacon_tx(void);
+static bool prv_is_sync_request_payload(const uint8_t *payload, uint16_t size);
 static void prv_continue_sync_wait_or_stop(void);
 static void prv_finish_sync_wait_and_stop(void);
-static bool prv_start_sync_wait_mode(uint16_t duration_sec);
+static bool prv_start_sync_wait_mode(uint16_t duration_hours);
 static bool prv_is_two_minute_mode_active(void);
 static void prv_close_rx_cycle_and_commit(void);
 static bool prv_start_pending_beacon_burst(void);
@@ -1186,8 +1188,31 @@ static bool prv_arm_sync_wait_rx(void)
     return true;
 }
 
+static bool prv_is_sync_request_payload(const uint8_t *payload, uint16_t size)
+{
+    const UI_Config_t* cfg = UI_GetConfig();
+    UI_NodeData_t nd;
+
+    if ((payload == NULL) || (cfg == NULL)) {
+        return false;
+    }
+
+    if (UI_Pkt_ParseNodeData(payload, size, &nd)) {
+        return ((nd.node_num == GW_SYNC_REQUEST_NODE_NUM) &&
+                (memcmp(nd.net_id, cfg->net_id, UI_NET_ID_LEN) == 0));
+    }
+
+    if (size < (uint16_t)(1u + UI_NET_ID_LEN)) {
+        return false;
+    }
+
+    return ((payload[0] == GW_SYNC_REQUEST_NODE_NUM) &&
+            (memcmp(&payload[1], cfg->net_id, UI_NET_ID_LEN) == 0));
+}
+
 static bool prv_start_sync_response_beacon_tx(void)
 {
+    UI_Radio_MarkRecoverNeeded();
     if (!prv_start_beacon_tx(UI_Time_NowSec2016())) {
         return false;
     }
@@ -1227,19 +1252,23 @@ static void prv_continue_sync_wait_or_stop(void)
     }
 }
 
-static bool prv_start_sync_wait_mode(uint16_t duration_sec)
+static bool prv_start_sync_wait_mode(uint16_t duration_hours)
 {
+    uint64_t duration_ms64;
     uint32_t duration_ms;
     uint32_t ble_hold_ms;
 
-    if ((!s_inited) || (duration_sec == 0u)) {
+    if ((!s_inited) || (duration_hours == 0u) ||
+        (duration_hours > GW_SYNC_WAIT_MAX_HOURS)) {
         return false;
     }
 
-    duration_ms = (uint32_t)duration_sec * 1000u;
-    if (duration_ms == 0u) {
+    duration_ms64 = (uint64_t)duration_hours * 60ull * 60ull * 1000ull;
+    if ((duration_ms64 == 0ull) || (duration_ms64 > 0x7FFFFFFFull)) {
         return false;
     }
+
+    duration_ms = (uint32_t)duration_ms64;
 
     prv_stop_ble_test_session(false);
     (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
@@ -1355,20 +1384,13 @@ void GW_App_Process(void)
 
         if ((ev & GW_EVT_RADIO_RX_DONE) != 0u) {
             if (s_state == GW_STATE_SYNC_WAIT_RX) {
-                UI_NodeData_t nd;
-                const UI_Config_t* cfg = UI_GetConfig();
                 bool is_sync_req = false;
 
                 UI_Radio_EnterSleep();
                 s_state = GW_STATE_IDLE;
                 UI_LPM_UnlockStop();
 
-                if ((cfg != NULL) && UI_Pkt_ParseNodeData(s_rx_shadow, s_rx_shadow_size, &nd)) {
-                    if ((nd.node_num == GW_SYNC_REQUEST_NODE_NUM) &&
-                        (memcmp(nd.net_id, cfg->net_id, UI_NET_ID_LEN) == 0)) {
-                        is_sync_req = true;
-                    }
-                }
+                is_sync_req = prv_is_sync_request_payload(s_rx_shadow, s_rx_shadow_size);
 
                 if (is_sync_req && prv_start_sync_response_beacon_tx()) {
                     return;
@@ -1957,9 +1979,9 @@ void UI_Hook_OnBeaconOnceRequested(void)
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
-bool UI_Hook_OnSyncRequested(uint16_t duration_sec)
+bool UI_Hook_OnSyncRequested(uint16_t duration_hours)
 {
-    return prv_start_sync_wait_mode(duration_sec);
+    return prv_start_sync_wait_mode(duration_hours);
 }
 
 void GW_Radio_OnTxDone(void)

@@ -18,9 +18,9 @@ __weak void UI_Hook_OnTimeChanged(void) {}
 __weak void UI_Hook_OnBeaconOnceRequested(void) {}
 __weak void UI_Hook_OnBleEndRequested(void) {}
 __weak void UI_Hook_OnTestStartRequested(void) {}
-__weak bool UI_Hook_OnSyncRequested(uint16_t duration_sec)
+__weak bool UI_Hook_OnSyncRequested(uint16_t duration_hours)
 {
-    (void)duration_sec;
+    (void)duration_hours;
     return false;
 }
 
@@ -464,12 +464,12 @@ static void prv_process_line_impl(const char* line_in, bool silent)
     /* -------------------- GW SYNC:X / SYNC:X ----------- */
     {
         const char* q = NULL;
-        uint16_t duration_sec = 0u;
+        uint16_t duration_hours = 0u;
         int n2 = 0;
 
         if (prv_match_cmd_head(p, "GW SYNC", &q) || prv_match_cmd_head(p, "SYNC", &q))
         {
-            n2 = prv_parse_u16_dec(q, &duration_sec);
+            n2 = prv_parse_u16_dec(q, &duration_hours);
             if (n2 <= 0)
             {
                 prv_send_error();
@@ -480,13 +480,13 @@ static void prv_process_line_impl(const char* line_in, bool silent)
             {
                 q++;
             }
-            if ((*q != '\0') || (duration_sec == 0u))
+            if ((*q != '\0') || (duration_hours == 0u))
             {
                 prv_send_error();
                 return;
             }
 
-            if (UI_Hook_OnSyncRequested(duration_sec))
+            if (UI_Hook_OnSyncRequested(duration_hours))
             {
                 prv_send_ok();
             }
