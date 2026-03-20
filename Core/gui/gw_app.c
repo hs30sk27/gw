@@ -141,6 +141,7 @@ static void prv_flash_tx_skip_last_live_uplink_head(void);
 static uint32_t prv_flash_tx_pending_count(void);
 static void prv_flash_tx_note_sent(uint32_t sent_count);
 static void prv_exit_dormant_stop_mode(void);
+static void prv_led1_sync_blink_stop(void);
 
 static void prv_cancel_pending_beacon_burst(void)
 {
@@ -376,11 +377,7 @@ static uint32_t prv_gw_offset_sec(void)
 
 static uint32_t prv_get_beacon_offset_sec(void)
 {
-    /* 1분 테스트 모드는 00초 고정 비콘 */
-    if (s_test_mode) {
-        return 0u;
-    }
-    /* 2분/정상 모드는 기존 GW NUM phase 유지 */
+    /* beacon은 1분/2분/5분+ 모두 GW 번호 phase(0/2/4초)를 유지한다. */
     return prv_gw_offset_sec();
 }
 
@@ -572,12 +569,10 @@ static uint32_t prv_get_rx_start_offset_sec(void)
         return 20u;
     }
     if (prv_is_two_minute_mode_active()) {
-        return 30u;
+        return 20u;
     }
-    /* 일반 모드 ND TX base offset은 60초(+ node_num*2초)다.
-     * 최신 코드에서 GW RX 시작을 30초로 당겨 놓으면서,
-     * max_nodes가 작은 경우 GW가 ND00/ND01 전송 전에 RX를 끝내는 문제가 생겼다.
-     * 정상 모드는 설정 매크로(UI_GW_RX_START_OFFSET_S)와 다시 맞춘다. */
+    /* 5분 이상 주기에서는 각 cycle의 +01분00초에 ND RX를 시작한다.
+     * 1분/2분 모드는 각각 +20초에 맞춘다. */
     return UI_GW_RX_START_OFFSET_S;
 }
 
@@ -931,7 +926,8 @@ static uint32_t prv_get_catm1_period_sec(void)
 
 static uint32_t prv_get_catm1_offset_sec(void)
 {
-    return prv_is_two_minute_mode_active() ? 90u : UI_CATM1_PERIODIC_OFFSET_S;
+    /* 2분 모드는 +01분20초, 5분 이상 주기는 +03분00초에 TCP uplink를 시도한다. */
+    return prv_is_two_minute_mode_active() ? 80u : UI_CATM1_PERIODIC_OFFSET_S;
 }
 
 static uint32_t prv_catm1_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t period_sec)
@@ -1721,8 +1717,8 @@ void GW_App_Process(void)
         }
 
         if ((!rx_due_now) && (next_rx > now_centi) && ((next_rx - now_centi) <= rx_prestart_centi)) {
-            /* 1분 테스트에서는 ND가 20초 + 약 150ms에 바로 송신한다.
-             * GW가 20초 정각에야 깨어나면 STOP 복귀/Radio 준비 지연 때문에 첫 패킷을 놓칠 수 있으므로
+            /* 1분/2분 모드에서는 ND가 +20초 슬롯에서 바로 송신한다.
+             * GW가 정각에야 깨어나면 STOP 복귀/Radio 준비 지연 때문에 첫 패킷을 놓칠 수 있으므로
              * RX를 약간 일찍 arm 해 두고 nominal slot 경계는 별도로 유지한다. */
             rx_prestart_now = true;
         }
@@ -1809,8 +1805,8 @@ void GW_App_Process(void)
             if (s_test_mode && (s_slot_cnt > UI_TESTMODE_MAX_NODES)) {
                 s_slot_cnt = UI_TESTMODE_MAX_NODES;
             }
-            if (prv_is_two_minute_mode_active() && (s_slot_cnt > 5u)) {
-                s_slot_cnt = 5u;
+            if (prv_is_two_minute_mode_active() && (s_slot_cnt > UI_TESTMODE_MAX_NODES)) {
+                s_slot_cnt = UI_TESTMODE_MAX_NODES;
             }
             s_rx_expected_nodes = s_slot_cnt;
             /* s_rx_cycle_start_ms는 실제 arm 시각이 아니라 nominal slot anchor를 유지한다.
