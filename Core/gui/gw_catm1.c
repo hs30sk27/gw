@@ -342,6 +342,8 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
 static bool prv_sync_time_from_modem_quick(bool notify_hook);
 static void prv_sync_time_before_tcp_send(void);
 static void prv_force_power_cut(void);
+static bool prv_was_powered_off_recently(uint32_t window_ms);
+static void prv_abort_tcp_open_and_power_off(uint32_t caopen_ms);
 static void prv_shutdown_modem_prefer_poweroff(void);
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz);
 static void prv_note_failed_snapshot_sent(void);
@@ -1851,6 +1853,24 @@ static void prv_finish_power_off_state(void)
     s_catm1_last_poweroff_ms = HAL_GetTick();
 }
 
+static bool prv_was_powered_off_recently(uint32_t window_ms)
+{
+    if ((window_ms == 0u) || (s_catm1_last_poweroff_ms == 0u)) {
+        return false;
+    }
+
+    return ((uint32_t)(HAL_GetTick() - s_catm1_last_poweroff_ms) < window_ms);
+}
+
+static void prv_abort_tcp_open_and_power_off(uint32_t caopen_ms)
+{
+    prv_mark_tcp_open_failure(caopen_ms);
+
+    /* +CAOPEN: 0,23 등 TCP open 실패는 cleanup까지 기다리지 말고
+     * 여기서 즉시 power off 경로로 내려서 모뎀이 계속 켜져 있지 않게 한다. */
+    prv_shutdown_modem_prefer_poweroff();
+}
+
 static void prv_force_power_cut(void)
 {
 #if defined(PWR_KEY_Pin)
@@ -1880,6 +1900,11 @@ static void prv_shutdown_modem_prefer_poweroff(void)
 
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz)
 {
+    if ((!opened) && prv_was_powered_off_recently(GW_CATM1_TCP_OPEN_FAIL_CPOWD_DELAY_MS +
+                                                 GW_CATM1_TCP_OPEN_FAIL_PWRDOWN_WAIT_MS + 500u)) {
+        return;
+    }
+
     if (opened) {
         (void)prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL,
                                 UI_CATM1_AT_TIMEOUT_MS, rsp, rsp_sz);
@@ -1944,8 +1969,8 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
         }
 
         if ((strstr(rsp, "ERROR") != NULL) || (strstr(rsp, "+CME ERROR") != NULL)) {
-            /* CAOPEN 실패 cleanup에서 2초 기준으로 빠른 power down 처리 */
-            prv_mark_tcp_open_failure(start);
+            /* CAOPEN 실패는 여기서 즉시 power off 처리한다. */
+            prv_abort_tcp_open_and_power_off(start);
             return false;
         }
 
@@ -1956,14 +1981,14 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
                 s_catm1_tcp_time_sync_pending = true;
                 return true;
             }
-            /* +CAOPEN: 0,0 이 아니면 cleanup에서 2초 기준으로 빠른 power down */
-            prv_mark_tcp_open_failure(start);
+            /* +CAOPEN: 0,23 등 비정상 결과는 여기서 즉시 power off 처리한다. */
+            prv_abort_tcp_open_and_power_off(start);
             return false;
         }
     }
 
-    /* +CAOPEN: 0,0 이 2초 안에 없으면 cleanup에서 즉시 CPOWD 경로로 전환 */
-    prv_mark_tcp_open_failure(start);
+    /* +CAOPEN: 0,0 이 2초 안에 없으면 여기서 바로 power off 한다. */
+    prv_abort_tcp_open_and_power_off(start);
     return false;
 }
 

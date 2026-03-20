@@ -18,6 +18,11 @@ __weak void UI_Hook_OnTimeChanged(void) {}
 __weak void UI_Hook_OnBeaconOnceRequested(void) {}
 __weak void UI_Hook_OnBleEndRequested(void) {}
 __weak void UI_Hook_OnTestStartRequested(void) {}
+__weak bool UI_Hook_OnSyncRequested(uint16_t duration_sec)
+{
+    (void)duration_sec;
+    return false;
+}
 
 /* -------------------------------------------------------------------------- */
 static bool s_cmd_silent_reply = false;
@@ -184,6 +189,18 @@ static bool prv_is_plain_safe_command(const char* s)
 
     if (prv_cmd_equals_relaxed(s, "LOC"))
     {
+        return true;
+    }
+
+    if (prv_match_cmd_head(s, "GW SYNC", &tail))
+    {
+        (void)tail;
+        return true;
+    }
+
+    if (prv_match_cmd_head(s, "SYNC", &tail))
+    {
+        (void)tail;
         return true;
     }
 
@@ -442,6 +459,43 @@ static void prv_process_line_impl(const char* line_in, bool silent)
     if (((s0 != NULL) && (*s0 == '<')) || valid_plain)
     {
         UI_BLE_ExtendMs(UI_BLE_ACTIVE_MS);
+    }
+
+    /* -------------------- GW SYNC:X / SYNC:X ----------- */
+    {
+        const char* q = NULL;
+        uint16_t duration_sec = 0u;
+        int n2 = 0;
+
+        if (prv_match_cmd_head(p, "GW SYNC", &q) || prv_match_cmd_head(p, "SYNC", &q))
+        {
+            n2 = prv_parse_u16_dec(q, &duration_sec);
+            if (n2 <= 0)
+            {
+                prv_send_error();
+                return;
+            }
+            q += n2;
+            while (isspace((unsigned char)*q))
+            {
+                q++;
+            }
+            if ((*q != '\0') || (duration_sec == 0u))
+            {
+                prv_send_error();
+                return;
+            }
+
+            if (UI_Hook_OnSyncRequested(duration_sec))
+            {
+                prv_send_ok();
+            }
+            else
+            {
+                prv_send_error();
+            }
+            return;
+        }
     }
 
     /* -------------------- TEST START -------------------- */

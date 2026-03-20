@@ -24,6 +24,8 @@ typedef enum {
     GW_STATE_IDLE = 0,
     GW_STATE_BEACON_TX,
     GW_STATE_RX_SLOTS,
+    GW_STATE_SYNC_WAIT_RX,
+    GW_STATE_SYNC_WAIT_TX,
 } GW_State_t;
 
 static GW_State_t s_state = GW_STATE_IDLE;
@@ -77,12 +79,15 @@ static bool s_beacon_recovery_mode = false;
 static uint8_t s_beacon_burst_remaining = 0u;
 static uint32_t s_beacon_burst_anchor_sec = 0u;
 static uint32_t s_beacon_burst_gap_ms = 0u;
+static uint32_t s_sync_wait_deadline_ms = 0u;
 
 #define GW_BEACON_BURST_COUNT_NORMAL   (3u)
 #define GW_BEACON_BURST_COUNT_RECOVERY (5u)
 #define GW_BEACON_BURST_GAP_MS         (250u)
 #define GW_BEACON_REMINDER_BURST_COUNT (2u)
 #define GW_BEACON_REMINDER_GAP_MS      (200u)
+#define GW_SYNC_WAIT_RX_CHUNK_MS       (5000u)
+#define GW_SYNC_REQUEST_NODE_NUM       (0xAAu)
 
 #ifndef GW_CATM1_RETRY_DELAY_MS
 #define GW_CATM1_RETRY_DELAY_MS        (60000u)
@@ -99,6 +104,15 @@ static void prv_requeue_events(uint32_t ev_mask);
 static bool prv_arm_rx_slot(void);
 static bool prv_rearm_current_rx_slot(void);
 static void prv_rx_next_slot(void);
+static bool prv_start_beacon_tx(uint32_t now_sec);
+static void prv_reset_rx_cycle_state(void);
+static void prv_abort_active_radio_session(void);
+static uint32_t prv_get_sync_wait_remaining_ms(void);
+static bool prv_arm_sync_wait_rx(void);
+static bool prv_start_sync_response_beacon_tx(void);
+static void prv_continue_sync_wait_or_stop(void);
+static void prv_finish_sync_wait_and_stop(void);
+static bool prv_start_sync_wait_mode(uint16_t duration_sec);
 static bool prv_is_two_minute_mode_active(void);
 static void prv_close_rx_cycle_and_commit(void);
 static bool prv_start_pending_beacon_burst(void);
@@ -1105,6 +1119,151 @@ static void prv_schedule_next_second_tick(uint64_t now_centi)
     prv_schedule_after_ms(wait_centi * 10u);
 }
 
+static void prv_reset_rx_cycle_state(void)
+{
+    s_data_freq_hz = 0u;
+    s_rx_cycle_minute_test = false;
+    s_rx_cycle_stamp_sec = 0u;
+    s_rx_window_deadline_ms = 0u;
+    s_rx_cycle_start_ms = 0u;
+    s_rx_expected_nodes = 0u;
+    s_rx_nodes_seen_mask = 0u;
+}
+
+static void prv_abort_active_radio_session(void)
+{
+    if (s_state == GW_STATE_IDLE) {
+        return;
+    }
+
+    UI_Radio_EnterSleep();
+    if ((s_state == GW_STATE_RX_SLOTS) ||
+        (s_state == GW_STATE_SYNC_WAIT_RX) ||
+        (s_state == GW_STATE_SYNC_WAIT_TX)) {
+        prv_reset_rx_cycle_state();
+    }
+    s_state = GW_STATE_IDLE;
+    UI_LPM_UnlockStop();
+}
+
+static uint32_t prv_get_sync_wait_remaining_ms(void)
+{
+    uint32_t now_ms;
+
+    if (s_sync_wait_deadline_ms == 0u) {
+        return 0u;
+    }
+
+    now_ms = HAL_GetTick();
+    if ((int32_t)(s_sync_wait_deadline_ms - now_ms) <= 0) {
+        return 0u;
+    }
+
+    return (s_sync_wait_deadline_ms - now_ms);
+}
+
+static bool prv_arm_sync_wait_rx(void)
+{
+    uint32_t timeout_ms = prv_get_sync_wait_remaining_ms();
+
+    if (timeout_ms == 0u) {
+        return false;
+    }
+    if (timeout_ms > GW_SYNC_WAIT_RX_CHUNK_MS) {
+        timeout_ms = GW_SYNC_WAIT_RX_CHUNK_MS;
+    }
+    if (!prv_radio_ready_for_rx()) {
+        return false;
+    }
+    if (!UI_Radio_PrepareRx(UI_NODE_PAYLOAD_LEN)) {
+        return false;
+    }
+
+    UI_LPM_LockStop();
+    s_state = GW_STATE_SYNC_WAIT_RX;
+    Radio.SetChannel(UI_RF_GetBeaconFreqHz());
+    Radio.Rx(timeout_ms);
+    return true;
+}
+
+static bool prv_start_sync_response_beacon_tx(void)
+{
+    if (!prv_start_beacon_tx(UI_Time_NowSec2016())) {
+        return false;
+    }
+
+    s_state = GW_STATE_SYNC_WAIT_TX;
+    return true;
+}
+
+static void prv_finish_sync_wait_and_stop(void)
+{
+    s_sync_wait_deadline_ms = 0u;
+    prv_cancel_pending_beacon_burst();
+
+    if ((s_state == GW_STATE_SYNC_WAIT_RX) || (s_state == GW_STATE_SYNC_WAIT_TX)) {
+        UI_Radio_EnterSleep();
+        s_state = GW_STATE_IDLE;
+        UI_LPM_UnlockStop();
+    }
+
+    prv_reset_rx_cycle_state();
+    UI_BLE_SetPersistent(false);
+    if (UI_BLE_IsActive()) {
+        UI_BLE_Disable();
+    }
+    UI_LPM_EnterStopNow();
+}
+
+static void prv_continue_sync_wait_or_stop(void)
+{
+    if (prv_get_sync_wait_remaining_ms() == 0u) {
+        prv_finish_sync_wait_and_stop();
+        return;
+    }
+
+    if (!prv_arm_sync_wait_rx()) {
+        prv_finish_sync_wait_and_stop();
+    }
+}
+
+static bool prv_start_sync_wait_mode(uint16_t duration_sec)
+{
+    uint32_t duration_ms;
+    uint32_t ble_hold_ms;
+
+    if ((!s_inited) || (duration_sec == 0u)) {
+        return false;
+    }
+
+    duration_ms = (uint32_t)duration_sec * 1000u;
+    if (duration_ms == 0u) {
+        return false;
+    }
+
+    prv_stop_ble_test_session(false);
+    (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
+    prv_cancel_pending_beacon_burst();
+    s_evt_flags &= ~(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
+                     GW_EVT_RADIO_TX_DONE | GW_EVT_RADIO_TX_TIMEOUT |
+                     GW_EVT_RADIO_RX_DONE | GW_EVT_RADIO_RX_TIMEOUT |
+                     GW_EVT_RADIO_RX_ERROR);
+
+    prv_abort_active_radio_session();
+    s_sync_wait_deadline_ms = HAL_GetTick() + duration_ms;
+
+    if (UI_BLE_IsActive()) {
+        ble_hold_ms = duration_ms + 2000u;
+        if (ble_hold_ms < UI_BLE_ACTIVE_MS) {
+            ble_hold_ms = UI_BLE_ACTIVE_MS;
+        }
+        UI_BLE_EnableForMs(ble_hold_ms);
+        UI_BLE_EnsureSerialReady();
+    }
+
+    return prv_arm_sync_wait_rx();
+}
+
 static bool prv_start_beacon_tx(uint32_t now_sec)
 {
     UI_DateTime_t dt;
@@ -1159,6 +1318,91 @@ void GW_App_Process(void)
     }
 
     uint32_t ev = s_evt_flags;
+
+    if (s_sync_wait_deadline_ms != 0u) {
+        if (ev == 0u) {
+            return;
+        }
+
+        s_evt_flags &= ~ev;
+
+        if ((ev & GW_EVT_BLE_TEST_EXPIRE) != 0u) {
+            prv_stop_ble_test_session(false);
+            ev &= ~GW_EVT_BLE_TEST_EXPIRE;
+        }
+
+        if ((ev & GW_EVT_RADIO_TX_DONE) != 0u) {
+            if (s_state == GW_STATE_SYNC_WAIT_TX) {
+                UI_Radio_EnterSleep();
+                s_state = GW_STATE_IDLE;
+                UI_LPM_UnlockStop();
+                s_beacon_counter++;
+                prv_continue_sync_wait_or_stop();
+            }
+            return;
+        }
+
+        if ((ev & GW_EVT_RADIO_TX_TIMEOUT) != 0u) {
+            UI_Radio_MarkRecoverNeeded();
+            UI_Radio_EnterSleep();
+            if (s_state == GW_STATE_SYNC_WAIT_TX) {
+                s_state = GW_STATE_IDLE;
+                UI_LPM_UnlockStop();
+            }
+            prv_continue_sync_wait_or_stop();
+            return;
+        }
+
+        if ((ev & GW_EVT_RADIO_RX_DONE) != 0u) {
+            if (s_state == GW_STATE_SYNC_WAIT_RX) {
+                UI_NodeData_t nd;
+                const UI_Config_t* cfg = UI_GetConfig();
+                bool is_sync_req = false;
+
+                UI_Radio_EnterSleep();
+                s_state = GW_STATE_IDLE;
+                UI_LPM_UnlockStop();
+
+                if ((cfg != NULL) && UI_Pkt_ParseNodeData(s_rx_shadow, s_rx_shadow_size, &nd)) {
+                    if ((nd.node_num == GW_SYNC_REQUEST_NODE_NUM) &&
+                        (memcmp(nd.net_id, cfg->net_id, UI_NET_ID_LEN) == 0)) {
+                        is_sync_req = true;
+                    }
+                }
+
+                if (is_sync_req && prv_start_sync_response_beacon_tx()) {
+                    return;
+                }
+
+                prv_continue_sync_wait_or_stop();
+            }
+            return;
+        }
+
+        if ((ev & GW_EVT_RADIO_RX_TIMEOUT) != 0u) {
+            if (s_state == GW_STATE_SYNC_WAIT_RX) {
+                UI_Radio_EnterSleep();
+                s_state = GW_STATE_IDLE;
+                UI_LPM_UnlockStop();
+            }
+            prv_continue_sync_wait_or_stop();
+            return;
+        }
+
+        if ((ev & GW_EVT_RADIO_RX_ERROR) != 0u) {
+            UI_Radio_MarkRecoverNeeded();
+            if (s_state == GW_STATE_SYNC_WAIT_RX) {
+                UI_Radio_EnterSleep();
+                s_state = GW_STATE_IDLE;
+                UI_LPM_UnlockStop();
+            }
+            prv_continue_sync_wait_or_stop();
+            return;
+        }
+
+        return;
+    }
+
     if (s_boot_time_sync_pending && (s_state == GW_STATE_IDLE) && !GW_Catm1_IsBusy()) {
         s_boot_time_sync_pending = false;
         (void)GW_Catm1_SyncTimeOnce();
@@ -1507,6 +1751,9 @@ static void prv_schedule_wakeup(void)
     if (s_state != GW_STATE_IDLE) {
         return;
     }
+    if (s_sync_wait_deadline_ms != 0u) {
+        return;
+    }
 
     prv_update_test_mode();
     now_centi = UI_Time_NowCenti2016();
@@ -1627,6 +1874,7 @@ void GW_App_Init(void)
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
+    s_sync_wait_deadline_ms = 0u;
     /* MCU 부팅 시 SIM7080 초기 설정(1NCE APN 포함)을 수행하고
      * 모뎀 시간도 즉시 읽어 보정한다. */
     s_boot_time_sync_pending = true;
@@ -1707,6 +1955,11 @@ void UI_Hook_OnBeaconOnceRequested(void)
     prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
     s_evt_flags |= GW_EVT_BEACON_ONESHOT;
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
+}
+
+bool UI_Hook_OnSyncRequested(uint16_t duration_sec)
+{
+    return prv_start_sync_wait_mode(duration_sec);
 }
 
 void GW_Radio_OnTxDone(void)
