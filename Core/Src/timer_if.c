@@ -26,6 +26,7 @@
 #include "stm32wlxx_ll_rtc.h"
 
 /* USER CODE BEGIN Includes */
+#include "stm32wlxx_ll_exti.h"
 
 /* USER CODE END Includes */
 
@@ -192,6 +193,7 @@ UTIL_TIMER_Status_t TIMER_IF_Init(void)
     TIMER_IF_StopTimer();
     /** DeActivate the Alarm A enabled by STM32CubeMX during MX_RTC_Init() */
     HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
+    TIMER_IF_ClearAlarmWakeupFlags();
     /*overload RTC feature enable*/
     hrtc.IsEnabled.RtcFeatures = UINT32_MAX;
 
@@ -212,6 +214,22 @@ UTIL_TIMER_Status_t TIMER_IF_Init(void)
 
   /* USER CODE END TIMER_IF_Init_Last */
   return ret;
+}
+
+void TIMER_IF_ClearAlarmWakeupFlags(void)
+{
+  /* RTC Alarm A uses EXTI line 17 on STM32WL.
+   * Clear both peripheral and EXTI/NVIC pending state so a stale alarm
+   * does not cause an immediate STOP wake-up. */
+  __HAL_RTC_ALARM_CLEAR_FLAG(&hrtc, RTC_FLAG_ALRAF);
+
+#if defined(LL_EXTI_ClearFlag_0_31) && defined(LL_EXTI_LINE_17)
+  LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_17);
+#endif
+
+#if defined(RTC_Alarm_IRQn)
+  HAL_NVIC_ClearPendingIRQ(RTC_Alarm_IRQn);
+#endif
 }
 
 UTIL_TIMER_Status_t TIMER_IF_StartTimer(uint32_t timeout)
@@ -248,12 +266,11 @@ UTIL_TIMER_Status_t TIMER_IF_StopTimer(void)
   /* USER CODE BEGIN TIMER_IF_StopTimer */
 
   /* USER CODE END TIMER_IF_StopTimer */
-  /* Clear RTC Alarm Flag */
-  __HAL_RTC_ALARM_CLEAR_FLAG(&hrtc, RTC_FLAG_ALRAF);
-  /* Disable the Alarm A interrupt */
+  /* Clear/disable the Alarm A source */
   HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
   /*overload RTC feature enable*/
   hrtc.IsEnabled.RtcFeatures = UINT32_MAX;
+  TIMER_IF_ClearAlarmWakeupFlags();
   /* USER CODE BEGIN TIMER_IF_StopTimer_Last */
 
   /* USER CODE END TIMER_IF_StopTimer_Last */
@@ -376,6 +393,8 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
   /* USER CODE BEGIN HAL_RTC_AlarmAEventCallback */
 
   /* USER CODE END HAL_RTC_AlarmAEventCallback */
+  UNUSED(hrtc);
+  TIMER_IF_ClearAlarmWakeupFlags();
   UTIL_TIMER_IRQ_MAP_PROCESS();
   /* USER CODE BEGIN HAL_RTC_AlarmAEventCallback_Last */
 

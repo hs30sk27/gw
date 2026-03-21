@@ -9,6 +9,7 @@
 #include "ui_time.h"
 #include "ui_radio.h"
 #include "gw_storage.h"
+#include "timer_if.h"
 
 #include "stm32_lpm.h"
 #include "utilities_def.h" /* CFG_LPM_APPLI_Id */
@@ -242,6 +243,11 @@ static void prv_disable_adc_clock(const ADC_HandleTypeDef *hadc_ptr)
 
 static void prv_clear_pending_irq_sources_before_stop(void)
 {
+    /* RTC Alarm A backend(TIMER_IF) uses EXTI line 17.
+     * GPIO EXTI만 지우면 RTC alarm 경로의 stale pending이 남을 수 있으므로
+     * STOP 직전 함께 정리한다. */
+    TIMER_IF_ClearAlarmWakeupFlags();
+
 #if defined(__HAL_GPIO_EXTI_CLEAR_IT)
 # if defined(PULSE_IN_Pin)
     __HAL_GPIO_EXTI_CLEAR_IT(PULSE_IN_Pin);
