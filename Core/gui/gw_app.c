@@ -1579,7 +1579,12 @@ void GW_App_Process(void)
                 prv_schedule_after_ms(s_beacon_burst_gap_ms);
             } else {
                 prv_cancel_pending_beacon_burst();
-                prv_schedule_wakeup();
+                if (s_catm1_uplink_pending) {
+                    s_evt_flags |= GW_EVT_WAKEUP;
+                    UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
+                } else {
+                    prv_schedule_wakeup();
+                }
             }
         }
         prv_requeue_events(ev & ~(GW_EVT_RADIO_TX_DONE));
@@ -2040,6 +2045,7 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
         return;
     }
     prv_exit_dormant_stop_mode();
+    prv_cancel_pending_beacon_burst();
     s_last_save_minute_id = 0xFFFFFFFFu;
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
@@ -2047,7 +2053,12 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
+
+    /* 같은 값(예: 5M->5M) 재입력도 재동기 요청으로 취급한다.
+     * beacon one-shot을 즉시 다시 보내고, TCP uplink도 바로 이어지도록
+     * pending을 함께 건다. */
     prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
+    prv_request_catm1_uplink();
     s_evt_flags |= GW_EVT_BEACON_ONESHOT;
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
