@@ -706,23 +706,11 @@ static bool prv_backlog_batch_included_live_record(uint32_t first_index, uint32_
 
 static bool prv_should_prioritize_live_snapshot_over_backlog(const GW_HourRec_t* rec, uint32_t pending)
 {
-    uint32_t now_minute_id;
-
-    if ((rec == NULL) || (pending == 0u) || !s_last_cycle_valid) {
-        return false;
-    }
-    if (!prv_is_minute_test_active()) {
-        return false;
-    }
-    if (rec->epoch_sec != s_last_cycle_rec.epoch_sec) {
-        return false;
-    }
-    if (prv_live_uplink_already_sent(rec)) {
-        return false;
-    }
-
-    now_minute_id = UI_Time_NowSec2016() / 60u;
-    return (s_last_cycle_minute_id == now_minute_id);
+    (void)rec;
+    (void)pending;
+    /* backlog가 하나라도 있으면 oldest..current 범위를 한 번에 보내야 한다.
+     * 따라서 live snapshot 단독 우선 전송은 사용하지 않는다. */
+    return false;
 }
 
 static uint32_t prv_flash_tx_clamp_floor_to_boot_tail(uint32_t floor_index)
@@ -992,8 +980,10 @@ static void prv_request_minute_test_uplink_for_minute(uint32_t minute_id)
     if (s_last_minute_test_uplink_minute_id == minute_id) {
         return;
     }
-    if (((s_last_cycle_valid) && (s_last_cycle_minute_id == minute_id)) ||
-        (prv_flash_tx_pending_count() > 0u)) {
+
+    /* 1분 모드에서는 backlog가 남아 있어도 현재 minute record가 실제로 닫힌 뒤에만
+     * uplink를 건다. 이렇게 해야 실패 시점 record부터 현재 record까지를 같이 보낸다. */
+    if ((s_last_cycle_valid) && (s_last_cycle_minute_id == minute_id)) {
         s_last_minute_test_uplink_minute_id = minute_id;
         prv_request_catm1_uplink();
     }
@@ -1011,18 +1001,11 @@ static bool prv_run_catm1_uplink_now(void)
 {
     const GW_HourRec_t* rec;
     uint32_t pending;
-    uint32_t now_ms;
 
     if (!s_catm1_uplink_pending) {
         return false;
     }
     if (s_state != GW_STATE_IDLE) {
-        return false;
-    }
-
-    now_ms = HAL_GetTick();
-    if ((s_catm1_retry_not_before_ms != 0u) &&
-        ((int32_t)(now_ms - s_catm1_retry_not_before_ms) < 0)) {
         return false;
     }
     if (GW_Catm1_IsBusy()) {
@@ -1040,12 +1023,10 @@ static bool prv_run_catm1_uplink_now(void)
             prv_note_live_uplink_sent(rec);
             prv_flash_tx_skip_last_live_uplink_head();
         }
-        s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
-        if ((!sent_ok) && s_catm1_uplink_pending) {
-            s_catm1_retry_not_before_ms = now_ms + GW_CATM1_RETRY_DELAY_MS;
-        } else {
-            s_catm1_retry_not_before_ms = 0u;
-        }
+        /* 실패해도 여기서 즉시 재시도하지 않는다.
+         * 다음 정시 uplink slot에서 flash backlog(이전~현재)를 다시 올린다. */
+        s_catm1_uplink_pending = false;
+        s_catm1_retry_not_before_ms = 0u;
         prv_schedule_wakeup();
         return true;
     }
@@ -1081,14 +1062,10 @@ static bool prv_run_catm1_uplink_now(void)
                 }
             }
             prv_flash_tx_resync_after_storage_change();
-            s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
-            if ((!sent_ok) && (sent_count == 0u) && s_catm1_uplink_pending) {
-                /* backlog는 flash에 남겨 두고, 짧은 backoff 뒤 자동 재시도한다.
-                 * pending을 여기서 내리면 이미 받은 데이터가 서버 uplink 없이 멈출 수 있다. */
-                s_catm1_retry_not_before_ms = now_ms + GW_CATM1_RETRY_DELAY_MS;
-            } else {
-                s_catm1_retry_not_before_ms = 0u;
-            }
+            /* backlog는 flash에 그대로 남기고, 다음 정시 uplink slot에서
+             * oldest..current 범위를 다시 전송한다. */
+            s_catm1_uplink_pending = false;
+            s_catm1_retry_not_before_ms = 0u;
             prv_schedule_wakeup();
             return true;
         }
@@ -1098,7 +1075,7 @@ static bool prv_run_catm1_uplink_now(void)
         bool sent_ok;
 
         if (prv_live_uplink_already_sent(rec)) {
-            s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
+            s_catm1_uplink_pending = false;
             s_catm1_retry_not_before_ms = 0u;
             prv_schedule_wakeup();
             return true;
@@ -1109,14 +1086,10 @@ static bool prv_run_catm1_uplink_now(void)
             prv_note_live_uplink_sent(rec);
             prv_flash_tx_skip_last_live_uplink_head();
         }
-        s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
-        if ((!sent_ok) && s_catm1_uplink_pending) {
-            /* live snapshot이 flash backlog로 넘어간 경우에는 pending을 유지해야
-             * 다음 wakeup에서 서버 uplink가 다시 이어진다. */
-            s_catm1_retry_not_before_ms = now_ms + GW_CATM1_RETRY_DELAY_MS;
-        } else {
-            s_catm1_retry_not_before_ms = 0u;
-        }
+        /* 실패 시 snapshot은 GW_Catm1_SendSnapshot() 안에서 flash backlog로 남긴다.
+         * 여기서는 다음 정시 slot까지 기다린다. */
+        s_catm1_uplink_pending = false;
+        s_catm1_retry_not_before_ms = 0u;
         prv_schedule_wakeup();
         return true;
     }
@@ -1977,28 +1950,8 @@ static void prv_schedule_wakeup(void)
             next = next_catm1;
         }
     }
-    if (s_catm1_uplink_pending) {
-        uint64_t next_uplink = 0u;
-        uint32_t now_ms = HAL_GetTick();
-
-        if ((s_catm1_retry_not_before_ms != 0u) &&
-            ((int32_t)(now_ms - s_catm1_retry_not_before_ms) < 0)) {
-            uint32_t wait_ms = s_catm1_retry_not_before_ms - now_ms;
-            uint64_t wait_centi = ((uint64_t)wait_ms + 9u) / 10u;
-            next_uplink = now_centi + ((wait_centi == 0u) ? 1u : wait_centi);
-        } else if (prv_is_minute_test_active() && (((uint32_t)(now_centi / 100u) % 60u) < 40u)) {
-            next_uplink = prv_next_test50_centi(now_centi);
-        } else {
-            uint64_t poll_centi = ((uint64_t)GW_CATM1_PENDING_POLL_MS + 9u) / 10u;
-
-            s_catm1_retry_not_before_ms = 0u;
-            next_uplink = now_centi + ((poll_centi == 0u) ? 1u : poll_centi);
-        }
-
-        if (next_uplink < next) {
-            next = next_uplink;
-        }
-    }
+    /* uplink pending은 정시 slot에서만 처리한다.
+     * 실패한 backlog는 flash에 유지하고, 별도 retry wakeup을 만들지 않는다. */
 
     delta_centi = (next > now_centi) ? (next - now_centi) : 1u;
     delta_ms = (uint32_t)(delta_centi * 10u);
