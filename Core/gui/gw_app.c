@@ -68,6 +68,7 @@ static bool s_last_cycle_valid = false;
 static uint32_t s_last_cycle_minute_id = 0u;
 static uint32_t s_last_save_minute_id = 0xFFFFFFFFu;
 static bool s_catm1_uplink_pending = false;
+static bool s_catm1_immediate_try_pending = false;
 static uint32_t s_last_catm1_slot_id = 0xFFFFFFFFu;
 static uint32_t s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
 static uint32_t s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
@@ -96,7 +97,7 @@ static bool s_dormant_stop_mode = false;
 #define GW_SYNC_LED1_OFF_MS            (500u)
 
 #ifndef GW_CATM1_RETRY_DELAY_MS
-#define GW_CATM1_RETRY_DELAY_MS        (60000u)
+#define GW_CATM1_RETRY_DELAY_MS        (120000u)
 #endif
 
 #ifndef GW_CATM1_PENDING_POLL_MS
@@ -635,6 +636,9 @@ static bool prv_should_try_catm1_uplink_now(uint32_t now_sec)
     if (!s_catm1_uplink_pending) {
         return false;
     }
+    if (!s_catm1_immediate_try_pending) {
+        return false;
+    }
     if (s_state != GW_STATE_IDLE) {
         return false;
     }
@@ -975,6 +979,12 @@ static void prv_request_catm1_uplink(void)
     s_catm1_uplink_pending = true;
 }
 
+static void prv_request_catm1_uplink_immediate(void)
+{
+    s_catm1_uplink_pending = true;
+    s_catm1_immediate_try_pending = true;
+}
+
 static void prv_request_minute_test_uplink_for_minute(uint32_t minute_id)
 {
     if (s_last_minute_test_uplink_minute_id == minute_id) {
@@ -1001,6 +1011,9 @@ static bool prv_run_catm1_uplink_now(void)
 {
     const GW_HourRec_t* rec;
     uint32_t pending;
+    uint32_t now_ms = HAL_GetTick();
+
+    (void)now_ms;
 
     if (!s_catm1_uplink_pending) {
         return false;
@@ -1012,6 +1025,8 @@ static bool prv_run_catm1_uplink_now(void)
         return false;
     }
 
+    s_catm1_retry_not_before_ms = 0u;
+    s_catm1_immediate_try_pending = false;
     rec = prv_get_catm1_uplink_record();
     prv_flash_tx_skip_last_live_uplink_head();
     pending = prv_flash_tx_pending_count();
@@ -1023,10 +1038,15 @@ static bool prv_run_catm1_uplink_now(void)
             prv_note_live_uplink_sent(rec);
             prv_flash_tx_skip_last_live_uplink_head();
         }
-        /* 실패해도 여기서 즉시 재시도하지 않는다.
-         * 다음 정시 uplink slot에서 flash backlog(이전~현재)를 다시 올린다. */
-        s_catm1_uplink_pending = false;
-        s_catm1_retry_not_before_ms = 0u;
+
+        prv_flash_tx_resync_after_storage_change();
+        pending = prv_flash_tx_pending_count();
+        s_catm1_uplink_pending = (pending > 0u);
+        if (s_catm1_uplink_pending) {
+            /* 실패 후에도 backlog는 유지하되, 즉시/고정지연 재시도는 하지 않는다.
+             * 다음 설정 주기(예: 5분/1시간) 또는 명시적 즉시 요청 때만 다시 보낸다. */
+            s_catm1_retry_not_before_ms = 0u;
+        }
         prv_schedule_wakeup();
         return true;
     }
@@ -1052,6 +1072,11 @@ static bool prv_run_catm1_uplink_now(void)
             !GW_Storage_ReadRecordByGlobalIndex(s_flash_tx_next_send_index, &first_rec, NULL)) {
             prv_flash_tx_reset_to_tail();
             pending = 0u;
+            s_catm1_uplink_pending = false;
+            s_catm1_immediate_try_pending = false;
+            s_catm1_retry_not_before_ms = 0u;
+            prv_schedule_wakeup();
+            return true;
         } else {
             sent_ok = GW_Catm1_SendStoredRange(s_flash_tx_next_send_index, batch_count, &sent_count);
             if (sent_count > 0u) {
@@ -1062,10 +1087,16 @@ static bool prv_run_catm1_uplink_now(void)
                 }
             }
             prv_flash_tx_resync_after_storage_change();
-            /* backlog는 flash에 그대로 남기고, 다음 정시 uplink slot에서
-             * oldest..current 범위를 다시 전송한다. */
-            s_catm1_uplink_pending = false;
-            s_catm1_retry_not_before_ms = 0u;
+            pending = prv_flash_tx_pending_count();
+            s_catm1_uplink_pending = (pending > 0u);
+            if (s_catm1_uplink_pending) {
+                /* 실패 record부터 현재 record까지 flash backlog를 유지한다.
+                 * 재전송은 120초 고정 지연이 아니라 다음 설정 주기 때 수행한다. */
+                s_catm1_retry_not_before_ms = 0u;
+            } else {
+                s_catm1_retry_not_before_ms = 0u;
+            }
+            (void)sent_ok;
             prv_schedule_wakeup();
             return true;
         }
@@ -1076,6 +1107,7 @@ static bool prv_run_catm1_uplink_now(void)
 
         if (prv_live_uplink_already_sent(rec)) {
             s_catm1_uplink_pending = false;
+            s_catm1_immediate_try_pending = false;
             s_catm1_retry_not_before_ms = 0u;
             prv_schedule_wakeup();
             return true;
@@ -1086,10 +1118,17 @@ static bool prv_run_catm1_uplink_now(void)
             prv_note_live_uplink_sent(rec);
             prv_flash_tx_skip_last_live_uplink_head();
         }
-        /* 실패 시 snapshot은 GW_Catm1_SendSnapshot() 안에서 flash backlog로 남긴다.
-         * 여기서는 다음 정시 slot까지 기다린다. */
-        s_catm1_uplink_pending = false;
-        s_catm1_retry_not_before_ms = 0u;
+
+        prv_flash_tx_resync_after_storage_change();
+        pending = prv_flash_tx_pending_count();
+        s_catm1_uplink_pending = (pending > 0u);
+        if (s_catm1_uplink_pending) {
+            /* snapshot 전송 실패 시 해당 record는 flash backlog에 남긴다.
+             * 재전송은 다음 설정 주기 때 실패 지점부터 현재까지 다시 보낸다. */
+            s_catm1_retry_not_before_ms = 0u;
+        } else {
+            s_catm1_retry_not_before_ms = 0u;
+        }
         prv_schedule_wakeup();
         return true;
     }
@@ -1801,7 +1840,9 @@ void GW_App_Process(void)
             return;
         }
 
-        if (prv_should_try_catm1_uplink_now(now_sec) && !beacon_due_now && !rx_due_now && !rx_prestart_now) {
+        if ((((catm1_due_now) && s_catm1_uplink_pending) ||
+             prv_should_try_catm1_uplink_now(now_sec)) &&
+            !beacon_due_now && !rx_due_now && !rx_prestart_now) {
             if (prv_run_catm1_uplink_now()) {
                 return;
             }
@@ -1955,8 +1996,19 @@ static void prv_schedule_wakeup(void)
             next = next_catm1;
         }
     }
-    /* uplink pending은 정시 slot에서만 처리한다.
-     * 실패한 backlog는 flash에 유지하고, 별도 retry wakeup을 만들지 않는다. */
+    if (s_catm1_uplink_pending && s_catm1_immediate_try_pending) {
+        uint64_t next_uplink;
+
+        if (prv_is_minute_test_active() && (((uint32_t)(now_centi / 100u) % 60u) < 40u)) {
+            next_uplink = prv_next_test50_centi(now_centi);
+        } else {
+            next_uplink = now_centi + 1u;
+        }
+
+        if (next_uplink < next) {
+            next = next_uplink;
+        }
+    }
 
     delta_centi = (next > now_centi) ? (next - now_centi) : 1u;
     delta_ms = (uint32_t)(delta_centi * 10u);
@@ -2001,6 +2053,7 @@ void GW_App_Init(void)
     s_last_cycle_minute_id = 0u;
     s_last_save_minute_id = 0xFFFFFFFFu;
     s_catm1_uplink_pending = false;
+    s_catm1_immediate_try_pending = false;
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
@@ -2028,6 +2081,7 @@ void UI_Hook_OnConfigChanged(void)
     prv_exit_dormant_stop_mode();
     prv_cancel_pending_beacon_burst();
     s_catm1_uplink_pending = false;
+    s_catm1_immediate_try_pending = false;
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
@@ -2055,10 +2109,10 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
     prv_update_test_mode();
 
     /* 같은 값(예: 5M->5M) 재입력도 재동기 요청으로 취급한다.
-     * beacon one-shot을 즉시 다시 보내고, TCP uplink도 바로 이어지도록
-     * pending을 함께 건다. */
+     * beacon one-shot을 즉시 다시 보내고, TCP uplink도 한 번 즉시 시도한다.
+     * 다만 실패하면 이후 재시도는 120초 고정 지연이 아니라 다음 설정 주기 때 수행한다. */
     prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
-    prv_request_catm1_uplink();
+    prv_request_catm1_uplink_immediate();
     s_evt_flags |= GW_EVT_BEACON_ONESHOT;
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
@@ -2071,6 +2125,7 @@ void UI_Hook_OnTimeChanged(void)
     prv_exit_dormant_stop_mode();
     prv_cancel_pending_beacon_burst();
     s_catm1_uplink_pending = false;
+    s_catm1_immediate_try_pending = false;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
