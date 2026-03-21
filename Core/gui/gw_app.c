@@ -138,6 +138,9 @@ static void prv_get_effective_setting_ascii(uint8_t out_setting_ascii[3]);
 static bool prv_should_try_catm1_uplink_now(uint32_t now_sec);
 static bool prv_flash_head_matches_last_live_uplink(void);
 static void prv_flash_tx_skip_last_live_uplink_head(void);
+static bool prv_live_uplink_already_sent(const GW_HourRec_t* rec);
+static void prv_note_live_uplink_sent(const GW_HourRec_t* rec);
+static bool prv_backlog_batch_included_live_record(uint32_t first_index, uint32_t sent_count, const GW_HourRec_t* rec);
 static uint32_t prv_flash_tx_pending_count(void);
 static void prv_flash_tx_note_sent(uint32_t sent_count);
 static void prv_exit_dormant_stop_mode(void);
@@ -668,6 +671,39 @@ static void prv_flash_tx_skip_last_live_uplink_head(void)
     }
 }
 
+static bool prv_live_uplink_already_sent(const GW_HourRec_t* rec)
+{
+    if ((rec == NULL) || (s_last_live_uplink_epoch_sec == 0xFFFFFFFFu)) {
+        return false;
+    }
+    return (rec->epoch_sec == s_last_live_uplink_epoch_sec);
+}
+
+static void prv_note_live_uplink_sent(const GW_HourRec_t* rec)
+{
+    if (rec == NULL) {
+        return;
+    }
+    s_last_live_uplink_epoch_sec = rec->epoch_sec;
+}
+
+static bool prv_backlog_batch_included_live_record(uint32_t first_index, uint32_t sent_count, const GW_HourRec_t* rec)
+{
+    GW_FileRec_t last_sent_rec;
+    const UI_Config_t* cfg = UI_GetConfig();
+    uint8_t cur_gw_num = (cfg != NULL) ? cfg->gw_num : 0u;
+
+    if ((rec == NULL) || (sent_count == 0u)) {
+        return false;
+    }
+    if (!GW_Storage_ReadRecordByGlobalIndex(first_index + sent_count - 1u, &last_sent_rec, NULL)) {
+        return false;
+    }
+
+    return ((last_sent_rec.gw_num == cur_gw_num) &&
+            (last_sent_rec.rec.epoch_sec == rec->epoch_sec));
+}
+
 static bool prv_should_prioritize_live_snapshot_over_backlog(const GW_HourRec_t* rec, uint32_t pending)
 {
     uint32_t now_minute_id;
@@ -681,7 +717,7 @@ static bool prv_should_prioritize_live_snapshot_over_backlog(const GW_HourRec_t*
     if (rec->epoch_sec != s_last_cycle_rec.epoch_sec) {
         return false;
     }
-    if (s_last_live_uplink_epoch_sec == rec->epoch_sec) {
+    if (prv_live_uplink_already_sent(rec)) {
         return false;
     }
 
@@ -1001,7 +1037,7 @@ static bool prv_run_catm1_uplink_now(void)
         bool sent_ok = GW_Catm1_SendSnapshot(rec);
 
         if (sent_ok && (rec != NULL)) {
-            s_last_live_uplink_epoch_sec = rec->epoch_sec;
+            prv_note_live_uplink_sent(rec);
             prv_flash_tx_skip_last_live_uplink_head();
         }
         s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
@@ -1019,6 +1055,7 @@ static bool prv_run_catm1_uplink_now(void)
         uint32_t sent_count = 0u;
         uint32_t batch_count;
         bool sent_ok = false;
+        bool backlog_included_live_rec = false;
 
         if ((rec != NULL) && !prv_flash_tail_matches_rec(rec)) {
             bool saved_ok = prv_save_hour_rec_verified(rec);
@@ -1037,7 +1074,11 @@ static bool prv_run_catm1_uplink_now(void)
         } else {
             sent_ok = GW_Catm1_SendStoredRange(s_flash_tx_next_send_index, batch_count, &sent_count);
             if (sent_count > 0u) {
+                backlog_included_live_rec = prv_backlog_batch_included_live_record(s_flash_tx_next_send_index, sent_count, rec);
                 prv_flash_tx_note_sent(sent_count);
+                if (backlog_included_live_rec) {
+                    prv_note_live_uplink_sent(rec);
+                }
             }
             prv_flash_tx_resync_after_storage_change();
             s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
@@ -1054,9 +1095,18 @@ static bool prv_run_catm1_uplink_now(void)
     }
 
     if (rec != NULL) {
-        bool sent_ok = GW_Catm1_SendSnapshot(rec);
+        bool sent_ok;
+
+        if (prv_live_uplink_already_sent(rec)) {
+            s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
+            s_catm1_retry_not_before_ms = 0u;
+            prv_schedule_wakeup();
+            return true;
+        }
+
+        sent_ok = GW_Catm1_SendSnapshot(rec);
         if (sent_ok) {
-            s_last_live_uplink_epoch_sec = rec->epoch_sec;
+            prv_note_live_uplink_sent(rec);
             prv_flash_tx_skip_last_live_uplink_head();
         }
         s_catm1_uplink_pending = (prv_flash_tx_pending_count() > 0u);
@@ -2002,10 +2052,10 @@ void GW_App_Init(void)
     s_led1_sync_blink_active = false;
     s_led1_sync_blink_on = false;
     s_dormant_stop_mode = false;
-    /* MCU 부팅 시 retained RTC 시간이 없을 때만 SIM7080 초기 설정(1NCE APN 포함)과
-     * 모뎀 시간 보정을 수행한다. Backup/URC로 이미 시간이 살아 있으면 재부팅마다
-     * 동일한 CAT-M1 bootstrap/time-sync를 반복하지 않는다. */
-    s_boot_time_sync_pending = !UI_Time_IsValid();
+    /* MCU 부팅 때마다 CAT-M1 one-shot 시간 확인을 수행한다.
+     * 다만 boot URC(*PSUTTZ)로 시간이 이미 들어온 세션에서는 gw_catm1 쪽에서
+     * +CCLK?만 짧게 확인하고 무거운 bootstrap/retry는 생략한다. */
+    s_boot_time_sync_pending = true;
     prv_hour_rec_init(prv_get_current_cycle_timestamp_sec());
     s_inited = true;
     prv_schedule_wakeup();

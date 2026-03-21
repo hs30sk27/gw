@@ -36,7 +36,7 @@ static bool s_catm1_time_auto_update_attempted_this_power = false;
 static bool s_catm1_startup_apn_configured_this_power = false;
 static bool s_catm1_bandcfg_applied_this_power = false;
 /* Power-on 직후 *PSUTTZ URC로 시간을 이미 받았는지 추적한다.
- * 이 경우 boot-time APN/bootstrap/CCLK 재시도는 생략한다. */
+ * 다만 boot-time sync 성공 처리는 실제 +CCLK?를 받아 최종 시간을 반영한 뒤에만 완료한다. */
 static bool s_catm1_time_synced_from_urc_this_power = false;
 static bool s_catm1_tcp_time_sync_pending = false;
 static volatile bool s_catm1_server_cmd_ind_seen = false;
@@ -207,6 +207,15 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_SERVER_CCLK_SYNC_GAP_MS
 #define GW_CATM1_SERVER_CCLK_SYNC_GAP_MS (150u)
 #endif
+#ifndef GW_CATM1_BOOT_FORCE_CCLK_TRY
+#define GW_CATM1_BOOT_FORCE_CCLK_TRY (3u)
+#endif
+#ifndef GW_CATM1_BOOT_FORCE_CCLK_GAP_MS
+#define GW_CATM1_BOOT_FORCE_CCLK_GAP_MS (1000u)
+#endif
+#ifndef GW_CATM1_BOOT_FORCE_CCLK_SETTLE_MS
+#define GW_CATM1_BOOT_FORCE_CCLK_SETTLE_MS (300u)
+#endif
 #ifndef GW_CATM1_PROFILE_SAVE_SETTLE_MS
 #define GW_CATM1_PROFILE_SAVE_SETTLE_MS (300u)
 #endif
@@ -356,11 +365,19 @@ static bool prv_wait_ps_attached(void);
 static bool prv_wait_ps_attached_until(uint32_t timeout_ms);
 static bool prv_try_session_resync(void);
 static void prv_try_restore_legacy_attach_profile(void);
+static void prv_delay_ms(uint32_t ms);
+static void prv_wait_rx_quiet(uint32_t quiet_ms, uint32_t max_wait_ms);
+static bool prv_query_network_time_epoch_retry(uint32_t max_try, uint32_t gap_ms,
+                                               bool break_on_invalid, bool* out_invalid_seen,
+                                               uint64_t* out_epoch_centi);
 static bool prv_apply_time_auto_update_cfg(void);
 static bool prv_request_auto_operator_select(bool force_send);
 static bool prv_is_eps_registered_stat(uint8_t stat);
 static void prv_prepare_low_current_before_poweroff(void);
 static bool prv_have_time_from_boot_urc_this_power(void);
+static bool prv_force_cclk_time_sync(uint32_t max_try, uint32_t gap_ms, bool notify_hook);
+static bool prv_force_cclk_time_sync_after_ctzu(bool notify_hook);
+static bool prv_finish_time_sync_from_boot_urc(bool notify_hook);
 
 static void prv_catm1_rb_reset(void)
 {
@@ -497,6 +514,46 @@ static void prv_apply_time_epoch(uint64_t epoch_centi, bool notify_hook)
 static bool prv_have_time_from_boot_urc_this_power(void)
 {
     return (s_catm1_time_synced_from_urc_this_power && UI_Time_IsValid());
+}
+
+static bool prv_force_cclk_time_sync(uint32_t max_try, uint32_t gap_ms, bool notify_hook)
+{
+    uint64_t epoch_centi = 0u;
+
+    if (max_try == 0u) {
+        return false;
+    }
+
+    if (!prv_query_network_time_epoch_retry(max_try, gap_ms, false, NULL, &epoch_centi)) {
+        return false;
+    }
+
+    prv_apply_time_epoch(epoch_centi, notify_hook);
+    return true;
+}
+
+static bool prv_force_cclk_time_sync_after_ctzu(bool notify_hook)
+{
+    if (!s_catm1_time_auto_update_attempted_this_power) {
+        return false;
+    }
+
+    prv_wait_rx_quiet(100u, 400u);
+    prv_delay_ms(GW_CATM1_BOOT_FORCE_CCLK_SETTLE_MS);
+    return prv_force_cclk_time_sync(GW_CATM1_BOOT_FORCE_CCLK_TRY,
+                                    GW_CATM1_BOOT_FORCE_CCLK_GAP_MS,
+                                    notify_hook);
+}
+
+static bool prv_finish_time_sync_from_boot_urc(bool notify_hook)
+{
+    if (!prv_have_time_from_boot_urc_this_power()) {
+        return false;
+    }
+
+    /* *PSUTTZ로 시간을 먼저 받더라도 boot-time sync 성공으로 끝내기 전에는
+     * 실제 +CCLK? 응답을 한 번 이상 받아 같은 세션에서 최종 시간을 적용한다. */
+    return prv_force_cclk_time_sync_after_ctzu(notify_hook);
 }
 
 static bool prv_try_consume_async_urc_line(const char* line, size_t line_len)
@@ -1463,10 +1520,15 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
     bool initial_invalid_cclk = false;
     char rsp[UI_CATM1_RX_BUF_SZ];
 
-    if (prv_have_time_from_boot_urc_this_power()) {
+    if (prv_finish_time_sync_from_boot_urc(true)) {
         return true;
     }
 
+    /* CTZU 적용 이후에는 PSUTTZ 여부와 관계없이 실제 +CCLK?를 먼저 한 번 이상 질의한다.
+     * 이렇게 해 두면 이후 CPIN/CEREG 재확인에서 조기 실패해도 CCLK 읽기 자체는 건너뛰지 않는다. */
+    if (prv_force_cclk_time_sync_after_ctzu(true)) {
+        return true;
+    }
     rsp[0] = '\0';
     if (prv_send_query_wait_prefix_ok("AT+CPIN?\r\n", "+CPIN:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
         (strstr(rsp, "+CPIN: READY") != NULL)) {
@@ -1481,7 +1543,7 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
 
     if (run_time_auto_update_setup) {
         prv_enable_network_time_auto_update();
-        if (prv_have_time_from_boot_urc_this_power()) {
+        if (prv_finish_time_sync_from_boot_urc(true)) {
             return true;
         }
     }
@@ -1499,7 +1561,7 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
     if (out_initial_invalid_cclk != NULL) {
         *out_initial_invalid_cclk = initial_invalid_cclk;
     }
-    if (prv_have_time_from_boot_urc_this_power()) {
+    if (prv_finish_time_sync_from_boot_urc(true)) {
         return true;
     }
     if (abort_on_initial_invalid && initial_invalid_cclk) {
@@ -1507,7 +1569,7 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
     }
 
     reg_ok = prv_wait_eps_registered_until(GW_CATM1_STARTUP_REG_WAIT_MS);
-    if (prv_have_time_from_boot_urc_this_power()) {
+    if (prv_finish_time_sync_from_boot_urc(true)) {
         return true;
     }
     if (reg_ok && prv_query_network_time_epoch_retry(GW_CATM1_STARTUP_CCLK_POST_REG_TRY,
@@ -1517,13 +1579,13 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
                                                      &epoch_centi)) {
         goto apply_time;
     }
-    if (prv_have_time_from_boot_urc_this_power()) {
+    if (prv_finish_time_sync_from_boot_urc(true)) {
         return true;
     }
 
     if (reg_ok) {
         ps_ok = prv_wait_ps_attached_until(GW_CATM1_STARTUP_PS_WAIT_MS);
-        if (prv_have_time_from_boot_urc_this_power()) {
+        if (prv_finish_time_sync_from_boot_urc(true)) {
             return true;
         }
         if (ps_ok && prv_query_network_time_epoch_retry(GW_CATM1_STARTUP_CCLK_POST_ATTACH_TRY,
@@ -1533,7 +1595,7 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
                                                         &epoch_centi)) {
             goto apply_time;
         }
-        if (prv_have_time_from_boot_urc_this_power()) {
+        if (prv_finish_time_sync_from_boot_urc(true)) {
             return true;
         }
         if (ps_ok && prv_activate_pdp() && prv_ntp_sync_time(&epoch_centi)) {
@@ -1541,7 +1603,7 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
         }
     }
 
-    return prv_have_time_from_boot_urc_this_power();
+    return prv_finish_time_sync_from_boot_urc(true);
 
 apply_time:
     prv_apply_time_epoch(epoch_centi, true);
@@ -2910,9 +2972,9 @@ retry_after_power_cycle:
         goto cleanup;
     }
 
-    /* Boot URC(*PSUTTZ)로 시간이 이미 들어왔다면
-     * CFUN/bootstrap/CCLK 질의를 더 진행하지 않고 여기서 종료한다. */
-    if (prv_have_time_from_boot_urc_this_power()) {
+    /* Boot URC(*PSUTTZ)로 시간이 먼저 들어왔더라도 여기서 바로 성공으로 끝내지 않고,
+     * 이후 CTZU/CCLK 경로에서 실제 +CCLK? 응답을 받은 뒤에만 성공 처리한다. */
+    if (prv_finish_time_sync_from_boot_urc(true)) {
         success = true;
         goto cleanup;
     }
@@ -2926,13 +2988,20 @@ retry_after_power_cycle:
         goto cleanup;
     }
 
-    if (prv_have_time_from_boot_urc_this_power()) {
+    if (prv_finish_time_sync_from_boot_urc(true)) {
         success = true;
         goto cleanup;
     }
 
     prv_enable_network_time_auto_update();
-    if (prv_have_time_from_boot_urc_this_power()) {
+
+    /* boot-time 경로에서는 PSUTTZ 유무와 무관하게 중간에 반드시 AT+CCLK?를 직접 읽고,
+     * 그 반환값으로 RTC를 최종 반영한다. */
+    if (prv_force_cclk_time_sync_after_ctzu(true)) {
+        success = true;
+        goto cleanup;
+    }
+    if (prv_finish_time_sync_from_boot_urc(true)) {
         success = true;
         goto cleanup;
     }
@@ -2946,7 +3015,7 @@ retry_after_power_cycle:
                                                    &initial_invalid_cclk);
     time_auto_update_used = time_auto_update_used || s_catm1_time_auto_update_attempted_this_power;
 
-    if ((!success) && prv_have_time_from_boot_urc_this_power()) {
+    if ((!success) && prv_finish_time_sync_from_boot_urc(true)) {
         success = true;
     }
 
@@ -3019,6 +3088,29 @@ static void prv_note_failed_snapshot_sent(void)
     s_failed_snapshot_queued_gw_num = 0u;
 }
 
+static bool prv_flash_tail_matches_hour_rec(const GW_HourRec_t* rec)
+{
+    GW_FileRec_t last_rec;
+    uint32_t tail;
+    const UI_Config_t* cfg = UI_GetConfig();
+    uint8_t cur_gw_num = (cfg != NULL) ? cfg->gw_num : 0u;
+
+    if (rec == NULL) {
+        return false;
+    }
+
+    tail = GW_Storage_GetTotalRecordCount();
+    if (tail == 0u) {
+        return false;
+    }
+    if (!GW_Storage_ReadRecordByGlobalIndex(tail - 1u, &last_rec, NULL)) {
+        return false;
+    }
+
+    return ((last_rec.gw_num == cur_gw_num) &&
+            (last_rec.rec.epoch_sec == rec->epoch_sec));
+}
+
 static bool prv_store_failed_snapshot_to_flash(const GW_HourRec_t* rec)
 {
     uint32_t before_cnt;
@@ -3037,6 +3129,13 @@ static bool prv_store_failed_snapshot_to_flash(const GW_HourRec_t* rec)
     if (s_failed_snapshot_queued_valid &&
         (s_failed_snapshot_queued_epoch_sec == rec->epoch_sec) &&
         (s_failed_snapshot_queued_gw_num == cur_gw_num)) {
+        return true;
+    }
+
+    if (prv_flash_tail_matches_hour_rec(rec)) {
+        s_failed_snapshot_queued_valid = true;
+        s_failed_snapshot_queued_epoch_sec = rec->epoch_sec;
+        s_failed_snapshot_queued_gw_num = cur_gw_num;
         return true;
     }
 
