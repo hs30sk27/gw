@@ -2002,9 +2002,10 @@ void GW_App_Init(void)
     s_led1_sync_blink_active = false;
     s_led1_sync_blink_on = false;
     s_dormant_stop_mode = false;
-    /* MCU 부팅 시 SIM7080 초기 설정(1NCE APN 포함)을 수행하고
-     * 모뎀 시간도 즉시 읽어 보정한다. */
-    s_boot_time_sync_pending = true;
+    /* MCU 부팅 시 retained RTC 시간이 없을 때만 SIM7080 초기 설정(1NCE APN 포함)과
+     * 모뎀 시간 보정을 수행한다. Backup/URC로 이미 시간이 살아 있으면 재부팅마다
+     * 동일한 CAT-M1 bootstrap/time-sync를 반복하지 않는다. */
+    s_boot_time_sync_pending = !UI_Time_IsValid();
     prv_hour_rec_init(prv_get_current_cycle_timestamp_sec());
     s_inited = true;
     prv_schedule_wakeup();

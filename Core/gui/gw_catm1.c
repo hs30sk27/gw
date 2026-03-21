@@ -35,6 +35,9 @@ static uint8_t s_time_sync_delta_count = 0u;
 static bool s_catm1_time_auto_update_attempted_this_power = false;
 static bool s_catm1_startup_apn_configured_this_power = false;
 static bool s_catm1_bandcfg_applied_this_power = false;
+/* Power-on 직후 *PSUTTZ URC로 시간을 이미 받았는지 추적한다.
+ * 이 경우 boot-time APN/bootstrap/CCLK 재시도는 생략한다. */
+static bool s_catm1_time_synced_from_urc_this_power = false;
 static bool s_catm1_tcp_time_sync_pending = false;
 static volatile bool s_catm1_server_cmd_ind_seen = false;
 
@@ -357,6 +360,7 @@ static bool prv_apply_time_auto_update_cfg(void);
 static bool prv_request_auto_operator_select(bool force_send);
 static bool prv_is_eps_registered_stat(uint8_t stat);
 static void prv_prepare_low_current_before_poweroff(void);
+static bool prv_have_time_from_boot_urc_this_power(void);
 
 static void prv_catm1_rb_reset(void)
 {
@@ -490,6 +494,11 @@ static void prv_apply_time_epoch(uint64_t epoch_centi, bool notify_hook)
     }
 }
 
+static bool prv_have_time_from_boot_urc_this_power(void)
+{
+    return (s_catm1_time_synced_from_urc_this_power && UI_Time_IsValid());
+}
+
 static bool prv_try_consume_async_urc_line(const char* line, size_t line_len)
 {
     const char* begin = line;
@@ -521,6 +530,7 @@ static bool prv_try_consume_async_urc_line(const char* line, size_t line_len)
 
     if (prv_parse_psuttz_epoch(tmp, &epoch_centi)) {
         prv_apply_time_epoch(epoch_centi, true);
+        s_catm1_time_synced_from_urc_this_power = true;
     }
     return true;
 }
@@ -1453,6 +1463,10 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
     bool initial_invalid_cclk = false;
     char rsp[UI_CATM1_RX_BUF_SZ];
 
+    if (prv_have_time_from_boot_urc_this_power()) {
+        return true;
+    }
+
     rsp[0] = '\0';
     if (prv_send_query_wait_prefix_ok("AT+CPIN?\r\n", "+CPIN:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
         (strstr(rsp, "+CPIN: READY") != NULL)) {
@@ -1467,6 +1481,9 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
 
     if (run_time_auto_update_setup) {
         prv_enable_network_time_auto_update();
+        if (prv_have_time_from_boot_urc_this_power()) {
+            return true;
+        }
     }
 
     (void)prv_send_query_wait_prefix_ok("AT+CEREG?\r\n", "+CEREG:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
@@ -1482,11 +1499,17 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
     if (out_initial_invalid_cclk != NULL) {
         *out_initial_invalid_cclk = initial_invalid_cclk;
     }
+    if (prv_have_time_from_boot_urc_this_power()) {
+        return true;
+    }
     if (abort_on_initial_invalid && initial_invalid_cclk) {
         return false;
     }
 
     reg_ok = prv_wait_eps_registered_until(GW_CATM1_STARTUP_REG_WAIT_MS);
+    if (prv_have_time_from_boot_urc_this_power()) {
+        return true;
+    }
     if (reg_ok && prv_query_network_time_epoch_retry(GW_CATM1_STARTUP_CCLK_POST_REG_TRY,
                                                      1000u,
                                                      false,
@@ -1494,9 +1517,15 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
                                                      &epoch_centi)) {
         goto apply_time;
     }
+    if (prv_have_time_from_boot_urc_this_power()) {
+        return true;
+    }
 
     if (reg_ok) {
         ps_ok = prv_wait_ps_attached_until(GW_CATM1_STARTUP_PS_WAIT_MS);
+        if (prv_have_time_from_boot_urc_this_power()) {
+            return true;
+        }
         if (ps_ok && prv_query_network_time_epoch_retry(GW_CATM1_STARTUP_CCLK_POST_ATTACH_TRY,
                                                         1000u,
                                                         false,
@@ -1504,12 +1533,15 @@ static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup
                                                         &epoch_centi)) {
             goto apply_time;
         }
+        if (prv_have_time_from_boot_urc_this_power()) {
+            return true;
+        }
         if (ps_ok && prv_activate_pdp() && prv_ntp_sync_time(&epoch_centi)) {
             goto apply_time;
         }
     }
 
-    return false;
+    return prv_have_time_from_boot_urc_this_power();
 
 apply_time:
     prv_apply_time_epoch(epoch_centi, true);
@@ -1882,6 +1914,7 @@ static void prv_finish_power_off_state(void)
     s_catm1_tcp_open_fail_powerdown_pending = false;
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
+    s_catm1_time_synced_from_urc_this_power = false;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
@@ -2672,6 +2705,7 @@ void GW_Catm1_Init(void)
     s_catm1_tcp_open_fail_powerdown_pending = false;
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
+    s_catm1_time_synced_from_urc_this_power = false;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
@@ -2697,6 +2731,7 @@ void GW_Catm1_PowerOn(void)
     s_catm1_tcp_open_fail_powerdown_pending = false;
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
+    s_catm1_time_synced_from_urc_this_power = false;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
@@ -2875,6 +2910,13 @@ retry_after_power_cycle:
         goto cleanup;
     }
 
+    /* Boot URC(*PSUTTZ)로 시간이 이미 들어왔다면
+     * CFUN/bootstrap/CCLK 질의를 더 진행하지 않고 여기서 종료한다. */
+    if (prv_have_time_from_boot_urc_this_power()) {
+        success = true;
+        goto cleanup;
+    }
+
     if (!prv_prepare_apn_before_time_sync()) {
         if (!retried) {
             retried = true;
@@ -2884,7 +2926,16 @@ retry_after_power_cycle:
         goto cleanup;
     }
 
+    if (prv_have_time_from_boot_urc_this_power()) {
+        success = true;
+        goto cleanup;
+    }
+
     prv_enable_network_time_auto_update();
+    if (prv_have_time_from_boot_urc_this_power()) {
+        success = true;
+        goto cleanup;
+    }
     time_auto_update_used = s_catm1_time_auto_update_attempted_this_power;
     if (time_auto_update_used) {
         s_catm1_time_auto_update_attempted_this_power = true;
@@ -2894,6 +2945,10 @@ retry_after_power_cycle:
                                                    !retried,
                                                    &initial_invalid_cclk);
     time_auto_update_used = time_auto_update_used || s_catm1_time_auto_update_attempted_this_power;
+
+    if ((!success) && prv_have_time_from_boot_urc_this_power()) {
+        success = true;
+    }
 
     if (!success && !retried) {
         retried = true;
