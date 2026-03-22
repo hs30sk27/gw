@@ -146,6 +146,7 @@ static uint32_t prv_flash_tx_pending_count(void);
 static void prv_flash_tx_note_sent(uint32_t sent_count);
 static void prv_exit_dormant_stop_mode(void);
 static void prv_led1_sync_blink_stop(void);
+static void prv_request_schedule_recheck_now(void);
 
 static void prv_cancel_pending_beacon_burst(void)
 {
@@ -1390,7 +1391,7 @@ static void prv_cancel_sync_wait_and_resume_ble(void)
     UI_BLE_SetPersistent(false);
     UI_BLE_EnableForMs(UI_BLE_ACTIVE_MS);
     UI_BLE_EnsureSerialReady();
-    prv_schedule_wakeup();
+    prv_request_schedule_recheck_now();
 }
 
 static void prv_continue_sync_wait_or_stop(void)
@@ -1440,7 +1441,7 @@ static bool prv_start_sync_wait_mode(uint16_t duration_hours)
 
     if (!prv_arm_sync_wait_rx()) {
         prv_cleanup_sync_wait_context();
-        prv_schedule_wakeup();
+        prv_request_schedule_recheck_now();
         return false;
     }
 
@@ -1490,6 +1491,19 @@ static bool prv_start_pending_beacon_burst(void)
 static void prv_tmr_wakeup_cb(void *context)
 {
     (void)context;
+    s_evt_flags |= GW_EVT_WAKEUP;
+    UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
+}
+
+static void prv_request_schedule_recheck_now(void)
+{
+    if (!s_inited) {
+        return;
+    }
+    if (s_dormant_stop_mode) {
+        return;
+    }
+    (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
     s_evt_flags |= GW_EVT_WAKEUP;
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
@@ -1618,12 +1632,10 @@ void GW_App_Process(void)
                 prv_schedule_after_ms(s_beacon_burst_gap_ms);
             } else {
                 prv_cancel_pending_beacon_burst();
-                if (s_catm1_uplink_pending) {
-                    s_evt_flags |= GW_EVT_WAKEUP;
-                    UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
-                } else {
-                    prv_schedule_wakeup();
-                }
+                /* 강제 beacon/sync 응답 beacon 이후에는 기존 wake timer를 새로 계산하기보다
+                 * 즉시 스케줄을 다시 평가한다. 그래야 정시 beacon/TCP slot이 grace 안에 있을 때
+                 * 다음 period로 건너뛰지 않는다. */
+                prv_request_schedule_recheck_now();
             }
         }
         prv_requeue_events(ev & ~(GW_EVT_RADIO_TX_DONE));
@@ -1638,7 +1650,7 @@ void GW_App_Process(void)
             UI_LPM_UnlockStop();
         }
         prv_cancel_pending_beacon_burst();
-        prv_schedule_wakeup();
+        prv_request_schedule_recheck_now();
         prv_requeue_events(ev & ~(GW_EVT_RADIO_TX_TIMEOUT));
         return;
     }
@@ -1732,7 +1744,7 @@ void GW_App_Process(void)
             if (prv_start_pending_beacon_burst()) {
                 return;
             }
-            prv_schedule_wakeup();
+            prv_request_schedule_recheck_now();
             return;
         }
         return;
