@@ -114,6 +114,8 @@ static uint32_t prv_evt_fetch_and_clear_all(void)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
 #define GW_RX_WINDOW_GUARD_MS   (1200u)
 #define GW_RX_PRESTART_MS       (500u)
+#define GW_TX_EVT_SAFETY_WAKE_MS (80u)
+#define GW_RX_EVT_SAFETY_SLACK_MS (20u)
 
 static bool s_test_mode = false;
 static bool s_ble_test_session_active = false;
@@ -180,6 +182,7 @@ static int16_t s_rx_shadow_rssi = 0;
 static int8_t s_rx_shadow_snr = 0;
 
 static void prv_schedule_wakeup(void);
+static void prv_arm_busy_state_safety_wakeup(uint32_t delay_ms);
 static void prv_requeue_events(uint32_t ev_mask);
 static bool prv_arm_rx_slot(void);
 static bool prv_rearm_current_rx_slot(void);
@@ -244,17 +247,17 @@ void GW_App_PrepareForDormantStop(void)
         return;
     }
 
-    s_dormant_stop_mode = true;
-    s_sync_wait_deadline_ms = 0u;
-    prv_evt_clear_all();
+    /* BLE OFF/timeout와 RADIO_TX_DONE/RX_DONE가 겹칠 때 이 함수가
+     * gw 쪽 pending event / wake timer / radio state를 지워 버리면,
+     * IRQ는 왔어도 main process가 그 결과를 처리하기 전에 정보가 사라질 수 있다.
+     *
+     * 여기서는 BLE test session 상태만 정리하고 GW scheduler/radio state는 유지한다.
+     * - TX/RX/sync 진행 중이면 UI_LPM lock 때문에 즉시 STOP 진입이 막힌다.
+     * - 진행 중이 아니면 UI_BLE_Process()의 UI_LPM_EnterStopNow()가 그대로 STOP에 들어가되,
+     *   RTC/UTIL timer 스케줄은 유지되어 다음 정시 beacon/RX/TCP가 계속 동작한다.
+     */
     s_ble_test_session_active = false;
-    (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
-    (void)UTIL_TIMER_Stop(&s_tmr_ble_test_expire);
-    prv_led1_sync_blink_stop();
-    prv_cancel_pending_beacon_burst();
-    prv_abort_active_radio_session();
-    prv_reset_rx_cycle_state();
-    UI_Radio_EnterSleep();
+    s_dormant_stop_mode = false;
 }
 
 static void prv_tmr_ble_test_expire_cb(void *context)
@@ -1226,6 +1229,23 @@ static bool prv_run_catm1_uplink_now(void)
     return false;
 }
 
+static void prv_arm_busy_state_safety_wakeup(uint32_t delay_ms)
+{
+    if (!s_inited) {
+        return;
+    }
+    if (s_dormant_stop_mode) {
+        return;
+    }
+    if (delay_ms == 0u) {
+        delay_ms = 1u;
+    }
+
+    (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
+    (void)UTIL_TIMER_SetPeriod(&s_tmr_wakeup, delay_ms);
+    (void)UTIL_TIMER_Start(&s_tmr_wakeup);
+}
+
 static void prv_requeue_events(uint32_t ev_mask)
 {
     if (ev_mask != 0u) {
@@ -1264,6 +1284,7 @@ static bool prv_arm_rx_slot(void)
     timeout_ms = prv_get_rx_slot_timeout_ms();
     Radio.SetChannel(s_data_freq_hz);
     Radio.Rx(timeout_ms);
+    prv_arm_busy_state_safety_wakeup(timeout_ms + GW_RX_EVT_SAFETY_SLACK_MS);
     return true;
 }
 
@@ -1407,6 +1428,7 @@ static bool prv_arm_sync_wait_rx(void)
     s_state = GW_STATE_SYNC_WAIT_RX;
     Radio.SetChannel(UI_RF_GetBeaconFreqHz());
     Radio.Rx(timeout_ms);
+    prv_arm_busy_state_safety_wakeup(timeout_ms + GW_RX_EVT_SAFETY_SLACK_MS);
     return true;
 }
 
@@ -1561,6 +1583,7 @@ static bool prv_start_beacon_tx(uint32_t now_sec)
     prv_led1_pulse_10ms();
     Radio.SetChannel(UI_RF_GetBeaconFreqHz());
     Radio.Send(s_beacon_tx_payload, UI_BEACON_PAYLOAD_LEN);
+    prv_arm_busy_state_safety_wakeup(GW_TX_EVT_SAFETY_WAKE_MS);
     return true;
 }
 
