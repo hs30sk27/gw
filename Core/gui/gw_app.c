@@ -51,6 +51,65 @@ static volatile uint32_t s_evt_flags = 0;
 #define GW_EVT_RADIO_RX_ERROR   (1u << 6)
 #define GW_EVT_BLE_TEST_EXPIRE  (1u << 7)
 
+
+static uint32_t prv_evt_lock(void)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+}
+
+static void prv_evt_unlock(uint32_t primask)
+{
+    __set_PRIMASK(primask);
+}
+
+static void prv_evt_set(uint32_t flags)
+{
+    uint32_t primask;
+
+    if (flags == 0u) {
+        return;
+    }
+
+    primask = prv_evt_lock();
+    s_evt_flags |= flags;
+    prv_evt_unlock(primask);
+}
+
+static void prv_evt_clear(uint32_t flags)
+{
+    uint32_t primask;
+
+    if (flags == 0u) {
+        return;
+    }
+
+    primask = prv_evt_lock();
+    s_evt_flags &= ~flags;
+    prv_evt_unlock(primask);
+}
+
+static void prv_evt_clear_all(void)
+{
+    uint32_t primask = prv_evt_lock();
+    s_evt_flags = 0u;
+    prv_evt_unlock(primask);
+}
+
+static uint32_t prv_evt_fetch_and_clear_all(void)
+{
+    uint32_t primask;
+    uint32_t flags;
+
+    primask = prv_evt_lock();
+    flags = s_evt_flags;
+    s_evt_flags = 0u;
+    prv_evt_unlock(primask);
+
+    return flags;
+}
+
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
 #define GW_RX_WINDOW_GUARD_MS   (1200u)
@@ -176,7 +235,7 @@ static void prv_exit_dormant_stop_mode(void)
     }
 
     s_dormant_stop_mode = false;
-    s_evt_flags = 0u;
+    prv_evt_clear_all();
 }
 
 void GW_App_PrepareForDormantStop(void)
@@ -187,7 +246,7 @@ void GW_App_PrepareForDormantStop(void)
 
     s_dormant_stop_mode = true;
     s_sync_wait_deadline_ms = 0u;
-    s_evt_flags = 0u;
+    prv_evt_clear_all();
     s_ble_test_session_active = false;
     (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
     (void)UTIL_TIMER_Stop(&s_tmr_ble_test_expire);
@@ -201,7 +260,7 @@ void GW_App_PrepareForDormantStop(void)
 static void prv_tmr_ble_test_expire_cb(void *context)
 {
     (void)context;
-    s_evt_flags |= GW_EVT_BLE_TEST_EXPIRE;
+    prv_evt_set(GW_EVT_BLE_TEST_EXPIRE);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
@@ -1170,7 +1229,7 @@ static bool prv_run_catm1_uplink_now(void)
 static void prv_requeue_events(uint32_t ev_mask)
 {
     if (ev_mask != 0u) {
-        s_evt_flags |= ev_mask;
+        prv_evt_set(ev_mask);
         UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
     }
 }
@@ -1390,10 +1449,10 @@ static void prv_cleanup_sync_wait_context(void)
     s_sync_wait_deadline_ms = 0u;
     (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
     prv_cancel_pending_beacon_burst();
-    s_evt_flags &= ~(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
-                     GW_EVT_RADIO_TX_DONE | GW_EVT_RADIO_TX_TIMEOUT |
-                     GW_EVT_RADIO_RX_DONE | GW_EVT_RADIO_RX_TIMEOUT |
-                     GW_EVT_RADIO_RX_ERROR | GW_EVT_BLE_TEST_EXPIRE);
+    prv_evt_clear(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
+                  GW_EVT_RADIO_TX_DONE | GW_EVT_RADIO_TX_TIMEOUT |
+                  GW_EVT_RADIO_RX_DONE | GW_EVT_RADIO_RX_TIMEOUT |
+                  GW_EVT_RADIO_RX_ERROR | GW_EVT_BLE_TEST_EXPIRE);
     prv_led1_sync_blink_stop();
 
     if ((s_state == GW_STATE_SYNC_WAIT_RX) || (s_state == GW_STATE_SYNC_WAIT_TX)) {
@@ -1460,10 +1519,10 @@ static bool prv_start_sync_wait_mode(uint16_t duration_hours)
     }
     (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
     prv_cancel_pending_beacon_burst();
-    s_evt_flags &= ~(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
-                     GW_EVT_RADIO_TX_DONE | GW_EVT_RADIO_TX_TIMEOUT |
-                     GW_EVT_RADIO_RX_DONE | GW_EVT_RADIO_RX_TIMEOUT |
-                     GW_EVT_RADIO_RX_ERROR | GW_EVT_BLE_TEST_EXPIRE);
+    prv_evt_clear(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
+                  GW_EVT_RADIO_TX_DONE | GW_EVT_RADIO_TX_TIMEOUT |
+                  GW_EVT_RADIO_RX_DONE | GW_EVT_RADIO_RX_TIMEOUT |
+                  GW_EVT_RADIO_RX_ERROR | GW_EVT_BLE_TEST_EXPIRE);
     prv_led1_sync_blink_stop();
 
     prv_abort_active_radio_session();
@@ -1521,7 +1580,7 @@ static bool prv_start_pending_beacon_burst(void)
 static void prv_tmr_wakeup_cb(void *context)
 {
     (void)context;
-    s_evt_flags |= GW_EVT_WAKEUP;
+    prv_evt_set(GW_EVT_WAKEUP);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
@@ -1534,7 +1593,7 @@ static void prv_request_schedule_recheck_now(void)
         return;
     }
     (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
-    s_evt_flags |= GW_EVT_WAKEUP;
+    prv_evt_set(GW_EVT_WAKEUP);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
@@ -1545,18 +1604,17 @@ void GW_App_Process(void)
     }
 
     if (s_dormant_stop_mode) {
-        s_evt_flags = 0u;
+        prv_evt_clear_all();
         return;
     }
 
-    uint32_t ev = s_evt_flags;
+    uint32_t ev = prv_evt_fetch_and_clear_all();
 
     if (s_sync_wait_deadline_ms != 0u) {
         if (ev == 0u) {
             return;
         }
 
-        s_evt_flags &= ~ev;
 
         if ((ev & GW_EVT_BLE_TEST_EXPIRE) != 0u) {
             prv_stop_ble_test_session(false);
@@ -1640,7 +1698,6 @@ void GW_App_Process(void)
     if (ev == 0u) {
         return;
     }
-    s_evt_flags &= ~ev;
     prv_update_test_mode();
 
     if ((ev & GW_EVT_BLE_TEST_EXPIRE) != 0u) {
@@ -2106,7 +2163,7 @@ void GW_App_Init(void)
     GW_Catm1_Init();
     prv_led1(false);
     s_state = GW_STATE_IDLE;
-    s_evt_flags = 0;
+    prv_evt_clear_all();
     s_beacon_counter = 0;
     s_test_mode = false;
     s_ble_test_session_active = false;
@@ -2192,7 +2249,7 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
                              GW_BEACON_TX_KIND_MANUAL,
                              0xFFFFFFFFu);
     prv_request_catm1_uplink_immediate();
-    s_evt_flags |= GW_EVT_BEACON_ONESHOT;
+    prv_evt_set(GW_EVT_BEACON_ONESHOT);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
@@ -2239,7 +2296,7 @@ void UI_Hook_OnBeaconOnceRequested(void)
                              GW_BEACON_BURST_GAP_MS,
                              GW_BEACON_TX_KIND_MANUAL,
                              0xFFFFFFFFu);
-    s_evt_flags |= GW_EVT_BEACON_ONESHOT;
+    prv_evt_set(GW_EVT_BEACON_ONESHOT);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
@@ -2261,14 +2318,14 @@ bool UI_Hook_OnBleStartRequested(void)
 
 void GW_Radio_OnTxDone(void)
 {
-    s_evt_flags |= GW_EVT_RADIO_TX_DONE;
+    prv_evt_set(GW_EVT_RADIO_TX_DONE);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
 void GW_Radio_OnTxTimeout(void)
 {
     UI_Radio_MarkRecoverNeeded();
-    s_evt_flags |= GW_EVT_RADIO_TX_TIMEOUT;
+    prv_evt_set(GW_EVT_RADIO_TX_TIMEOUT);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
@@ -2358,19 +2415,19 @@ void GW_Radio_OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr
     s_rx_shadow_size = size;
     s_rx_shadow_rssi = rssi;
     s_rx_shadow_snr = snr;
-    s_evt_flags |= GW_EVT_RADIO_RX_DONE;
+    prv_evt_set(GW_EVT_RADIO_RX_DONE);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
 void GW_Radio_OnRxTimeout(void)
 {
-    s_evt_flags |= GW_EVT_RADIO_RX_TIMEOUT;
+    prv_evt_set(GW_EVT_RADIO_RX_TIMEOUT);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
 void GW_Radio_OnRxError(void)
 {
     UI_Radio_MarkRecoverNeeded();
-    s_evt_flags |= GW_EVT_RADIO_RX_ERROR;
+    prv_evt_set(GW_EVT_RADIO_RX_ERROR);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
