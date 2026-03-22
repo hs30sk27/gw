@@ -28,6 +28,13 @@ typedef enum {
     GW_STATE_SYNC_WAIT_TX,
 } GW_State_t;
 
+typedef enum {
+    GW_BEACON_TX_KIND_NONE = 0,
+    GW_BEACON_TX_KIND_MANUAL,
+    GW_BEACON_TX_KIND_SCHEDULED,
+    GW_BEACON_TX_KIND_REMINDER,
+} GW_BeaconTxKind_t;
+
 static GW_State_t s_state = GW_STATE_IDLE;
 static bool s_inited = false;
 static UTIL_TIMER_Object_t s_tmr_wakeup;
@@ -80,6 +87,9 @@ static bool s_beacon_recovery_mode = false;
 static uint8_t s_beacon_burst_remaining = 0u;
 static uint32_t s_beacon_burst_anchor_sec = 0u;
 static uint32_t s_beacon_burst_gap_ms = 0u;
+static GW_BeaconTxKind_t s_beacon_tx_kind = GW_BEACON_TX_KIND_NONE;
+static uint32_t s_active_periodic_beacon_slot_id = 0xFFFFFFFFu;
+static uint32_t s_last_periodic_beacon_slot_id = 0xFFFFFFFFu;
 static uint32_t s_sync_wait_deadline_ms = 0u;
 static bool s_led1_sync_blink_active = false;
 static bool s_led1_sync_blink_on = false;
@@ -131,6 +141,7 @@ static bool prv_is_two_minute_mode_active(void);
 static void prv_close_rx_cycle_and_commit(void);
 static bool prv_start_pending_beacon_burst(void);
 static void prv_cancel_pending_beacon_burst(void);
+static uint32_t prv_beacon_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t period_sec, uint32_t offset_sec);
 static bool prv_get_reminder_offset_sec(uint32_t* out_offset_sec);
 static void prv_send_ble_test_report_if_active(const GW_HourRec_t* rec);
 static void prv_start_ble_test_session(void);
@@ -154,6 +165,8 @@ static void prv_cancel_pending_beacon_burst(void)
     s_beacon_burst_anchor_sec = 0u;
     s_beacon_burst_gap_ms = 0u;
     s_beacon_oneshot_pending = false;
+    s_beacon_tx_kind = GW_BEACON_TX_KIND_NONE;
+    s_active_periodic_beacon_slot_id = 0xFFFFFFFFu;
 }
 
 static void prv_exit_dormant_stop_mode(void)
@@ -223,7 +236,11 @@ static uint8_t prv_get_beacon_burst_count(void)
     return 1u;
 }
 
-static void prv_prepare_beacon_burst(uint32_t anchor_sec, uint8_t total_count, uint32_t gap_ms)
+static void prv_prepare_beacon_burst(uint32_t anchor_sec,
+                                    uint8_t total_count,
+                                    uint32_t gap_ms,
+                                    GW_BeaconTxKind_t kind,
+                                    uint32_t periodic_slot_id)
 {
     if (total_count == 0u) {
         total_count = 1u;
@@ -234,6 +251,8 @@ static void prv_prepare_beacon_burst(uint32_t anchor_sec, uint8_t total_count, u
     s_beacon_burst_anchor_sec = anchor_sec;
     s_beacon_burst_remaining = total_count;
     s_beacon_burst_gap_ms = gap_ms;
+    s_beacon_tx_kind = kind;
+    s_active_periodic_beacon_slot_id = (kind == GW_BEACON_TX_KIND_SCHEDULED) ? periodic_slot_id : 0xFFFFFFFFu;
     s_beacon_oneshot_pending = true;
 }
 
@@ -967,6 +986,17 @@ static uint32_t prv_catm1_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t pe
     return (epoch_sec / period_sec);
 }
 
+static uint32_t prv_beacon_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t period_sec, uint32_t offset_sec)
+{
+    if (period_sec == 0u) {
+        return 0xFFFFFFFFu;
+    }
+    if (epoch_sec < offset_sec) {
+        return 0u;
+    }
+    return ((epoch_sec - offset_sec) / period_sec);
+}
+
 static bool prv_last_cycle_matches_slot(uint32_t period_sec, uint32_t slot_id)
 {
     if ((!s_last_cycle_valid) || (period_sec == 0u)) {
@@ -1623,19 +1653,31 @@ void GW_App_Process(void)
 
     if ((ev & GW_EVT_RADIO_TX_DONE) != 0u) {
         if (s_state == GW_STATE_BEACON_TX) {
+            GW_BeaconTxKind_t finished_kind = s_beacon_tx_kind;
+
             UI_Radio_EnterSleep();
             s_state = GW_STATE_IDLE;
             UI_LPM_UnlockStop();
             s_beacon_counter++;
+
+            if ((finished_kind == GW_BEACON_TX_KIND_SCHEDULED) &&
+                (s_active_periodic_beacon_slot_id != 0xFFFFFFFFu) &&
+                (s_beacon_burst_remaining <= 1u)) {
+                s_last_periodic_beacon_slot_id = s_active_periodic_beacon_slot_id;
+            }
+
             if (s_beacon_burst_remaining > 0u) {
                 s_beacon_oneshot_pending = true;
                 prv_schedule_after_ms(s_beacon_burst_gap_ms);
             } else {
                 prv_cancel_pending_beacon_burst();
-                /* 강제 beacon/sync 응답 beacon 이후에는 기존 wake timer를 새로 계산하기보다
-                 * 즉시 스케줄을 다시 평가한다. 그래야 정시 beacon/TCP slot이 grace 안에 있을 때
-                 * 다음 period로 건너뛰지 않는다. */
-                prv_request_schedule_recheck_now();
+                /* manual one-shot은 즉시 스케줄을 다시 평가해 정시 beacon/RX/TCP를 놓치지 않게 하고,
+                 * 정시 beacon 자체는 여기서 즉시 재평가하지 않아 같은 slot에서 두 번 나가지 않게 한다. */
+                if (finished_kind == GW_BEACON_TX_KIND_MANUAL) {
+                    prv_request_schedule_recheck_now();
+                } else {
+                    prv_schedule_wakeup();
+                }
             }
         }
         prv_requeue_events(ev & ~(GW_EVT_RADIO_TX_DONE));
@@ -1777,6 +1819,7 @@ void GW_App_Process(void)
         uint64_t due_test50 = 0u;
         uint64_t due_catm1 = 0u;
         uint64_t rx_prestart_centi = prv_get_rx_prestart_centi();
+        uint32_t beacon_slot_id = 0xFFFFFFFFu;
         bool beacon_due_now = prv_is_event_due_now(now_centi, beacon_interval, beacon_off, 120u, &due_beacon);
         bool rx_due_now = prv_is_event_due_now(now_centi, rx_interval, rx_start, 120u, &due_rx);
         bool reminder_due_now = have_reminder && prv_is_event_due_now(now_centi, rx_interval, reminder_off, 120u, &due_reminder);
@@ -1793,6 +1836,13 @@ void GW_App_Process(void)
             uint32_t catm1_period = prv_get_catm1_period_sec();
             next_catm1 = prv_next_event_centi(now_centi, catm1_period, prv_get_catm1_offset_sec());
             catm1_due_now = prv_is_event_due_now(now_centi, catm1_period, prv_get_catm1_offset_sec(), 120u, &due_catm1);
+        }
+
+        if (beacon_due_now) {
+            beacon_slot_id = prv_beacon_slot_id_from_epoch_sec((uint32_t)(due_beacon / 100u), beacon_interval, beacon_off);
+            if (s_last_periodic_beacon_slot_id == beacon_slot_id) {
+                beacon_due_now = false;
+            }
         }
 
         if ((!rx_due_now) && (next_rx > now_centi) && ((next_rx - now_centi) <= rx_prestart_centi)) {
@@ -1819,7 +1869,11 @@ void GW_App_Process(void)
 
         if (reminder_due_now && !beacon_due_now && !rx_due_now) {
             uint32_t reminder_sec = (uint32_t)(due_reminder / 100u);
-            prv_prepare_beacon_burst(reminder_sec, GW_BEACON_REMINDER_BURST_COUNT, GW_BEACON_REMINDER_GAP_MS);
+            prv_prepare_beacon_burst(reminder_sec,
+                                     GW_BEACON_REMINDER_BURST_COUNT,
+                                     GW_BEACON_REMINDER_GAP_MS,
+                                     GW_BEACON_TX_KIND_REMINDER,
+                                     0xFFFFFFFFu);
             if (prv_start_pending_beacon_burst()) {
                 return;
             }
@@ -1862,7 +1916,11 @@ void GW_App_Process(void)
 
         if (beacon_due_now) {
             uint32_t beacon_sec = (uint32_t)(due_beacon / 100u);
-            prv_prepare_beacon_burst(beacon_sec, prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
+            prv_prepare_beacon_burst(beacon_sec,
+                                     prv_get_beacon_burst_count(),
+                                     GW_BEACON_BURST_GAP_MS,
+                                     GW_BEACON_TX_KIND_SCHEDULED,
+                                     beacon_slot_id);
             if (prv_start_pending_beacon_burst()) {
                 return;
             }
@@ -2071,6 +2129,9 @@ void GW_App_Init(void)
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
+    s_last_periodic_beacon_slot_id = 0xFFFFFFFFu;
+    s_active_periodic_beacon_slot_id = 0xFFFFFFFFu;
+    s_beacon_tx_kind = GW_BEACON_TX_KIND_NONE;
     s_sync_wait_deadline_ms = 0u;
     s_led1_sync_blink_active = false;
     s_led1_sync_blink_on = false;
@@ -2099,6 +2160,7 @@ void UI_Hook_OnConfigChanged(void)
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
+    s_last_periodic_beacon_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
     prv_schedule_wakeup();
 }
@@ -2118,12 +2180,17 @@ void UI_Hook_OnSettingChanged(uint8_t value, char unit)
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
+    s_last_periodic_beacon_slot_id = 0xFFFFFFFFu;
     prv_update_test_mode();
 
     /* 같은 값(예: 5M->5M) 재입력도 재동기 요청으로 취급한다.
      * beacon one-shot을 즉시 다시 보내고, TCP uplink도 한 번 즉시 시도한다.
      * 다만 실패하면 이후 재시도는 120초 고정 지연이 아니라 다음 설정 주기 때 수행한다. */
-    prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
+    prv_prepare_beacon_burst(UI_Time_NowSec2016(),
+                             prv_get_beacon_burst_count(),
+                             GW_BEACON_BURST_GAP_MS,
+                             GW_BEACON_TX_KIND_MANUAL,
+                             0xFFFFFFFFu);
     prv_request_catm1_uplink_immediate();
     s_evt_flags |= GW_EVT_BEACON_ONESHOT;
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
@@ -2142,6 +2209,7 @@ void UI_Hook_OnTimeChanged(void)
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
+    s_last_periodic_beacon_slot_id = 0xFFFFFFFFu;
     prv_schedule_wakeup();
 }
 
@@ -2166,7 +2234,11 @@ void UI_Hook_OnBeaconOnceRequested(void)
         return;
     }
     prv_exit_dormant_stop_mode();
-    prv_prepare_beacon_burst(UI_Time_NowSec2016(), prv_get_beacon_burst_count(), GW_BEACON_BURST_GAP_MS);
+    prv_prepare_beacon_burst(UI_Time_NowSec2016(),
+                             prv_get_beacon_burst_count(),
+                             GW_BEACON_BURST_GAP_MS,
+                             GW_BEACON_TX_KIND_MANUAL,
+                             0xFFFFFFFFu);
     s_evt_flags |= GW_EVT_BEACON_ONESHOT;
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
