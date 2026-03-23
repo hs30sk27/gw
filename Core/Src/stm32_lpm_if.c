@@ -25,13 +25,12 @@
 #include "usart_if.h"
 
 /* USER CODE BEGIN Includes */
-extern void UI_PWR_DeinitForStop(void);
 #include "ui_lpm.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
 /* USER CODE BEGIN EV */
-#include "radio.h"
+
 /* USER CODE END EV */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -93,15 +92,17 @@ void PWR_ExitOffMode(void)
 void PWR_EnterStopMode(void)
 {
   /* USER CODE BEGIN EnterStopMode_1 */
-
   UI_LPM_BeforeStop_DeInitPeripherals();
-  /* UI_UART1_TxDma_DeInit()는 main() USER CODE BEGIN 2에서 부팅 시 1회만 호출한다.
-   * Stop 진입마다 반복 호출하면 이미 RESET 상태인 DMA 핸들에 DeInit이
-   * 중복 실행되어 불필요한 HAL 경로를 거치고 wake-up 시간이 늘어난다. */
-
+  __NOP();
   /* USER CODE END EnterStopMode_1 */
-  HAL_SuspendTick();
 
+  HAL_SuspendTick();
+  /*
+   * nd는 stop 직전 UI/RTC wake source를 이미 별도로 정리한다.
+   * 그 위에 SysTick/PendSV pending 이 남아 있으면 WFI 직후 바로 빠져나와
+   * STOP2에 못 머물거나 진입 직후 즉시 재기상하는 현상이 생길 수 있다.
+   * gw와 동일하게 stale scheduler/tick pending 을 비운 뒤 STOP2로 진입한다.
+   */
 #if defined(SCB_ICSR_PENDSTCLR_Msk)
   SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
 #endif
@@ -112,7 +113,6 @@ void PWR_EnterStopMode(void)
   __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
 #endif
 
-  /* Clear Status Flag before entering STOP/STANDBY Mode */
   LL_PWR_ClearFlag_C1STOP_C1STB();
 
   /* USER CODE BEGIN EnterStopMode_2 */
@@ -143,9 +143,11 @@ void PWR_ExitStopMode(void)
   /* USER CODE BEGIN ExitStopMode_2 */
 #endif
   __NOP();
+
   SystemClock_Config();
   HAL_ResumeTick();
   UI_LPM_AfterStop_ReInitPeripherals();
+
   /* USER CODE END ExitStopMode_2 */
 }
 
