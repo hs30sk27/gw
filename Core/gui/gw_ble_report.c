@@ -16,9 +16,9 @@ static bool prv_node_valid(const GW_NodeRec_t* r)
 
     if (r->batt_lvl != UI_NODE_BATT_LVL_INVALID) { return true; }
     if (r->temp_c != UI_NODE_TEMP_INVALID_C) { return true; }
-    if ((uint16_t)r->x != 0xFFFFu) { return true; }
-    if ((uint16_t)r->y != 0xFFFFu) { return true; }
-    if ((uint16_t)r->z != 0xFFFFu) { return true; }
+    if (r->x != 0xFFFFu) { return true; }
+    if (r->y != 0xFFFFu) { return true; }
+    if (r->z != 0xFFFFu) { return true; }
     if (r->adc != 0xFFFFu) { return true; }
     if (r->pulse_cnt != 0xFFFFFFFFu) { return true; }
     return false;
@@ -159,16 +159,16 @@ bool GW_BleReport_SendMinuteTestRecord(const GW_HourRec_t* rec)
                                bbuf,
                                ntbuf);
 
-        icm_valid = (((uint16_t)r->x != 0xFFFFu) ||
-                     ((uint16_t)r->y != 0xFFFFu) ||
-                     ((uint16_t)r->z != 0xFFFFu));
+        icm_valid = ((r->x != 0xFFFFu) ||
+                     (r->y != 0xFFFFu) ||
+                     (r->z != 0xFFFFu));
         if ((len < sizeof(line)) && icm_valid)
         {
             len += (size_t)snprintf(line + len, sizeof(line) - len,
-                                    ",X:%d,Y:%d,Z:%d",
-                                    (int)r->x,
-                                    (int)r->y,
-                                    (int)r->z);
+                                    ",X:%u,Y:%u,Z:%u",
+                                    (unsigned)r->x,
+                                    (unsigned)r->y,
+                                    (unsigned)r->z);
         }
         if ((len < sizeof(line)) && (r->adc != 0xFFFFu))
         {

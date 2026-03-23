@@ -95,6 +95,7 @@ void PWR_EnterStopMode(void)
   UI_LPM_BeforeStop_DeInitPeripherals();
   __NOP();
   /* USER CODE END EnterStopMode_1 */
+  HAL_GPIO_WritePin(GPIOB, CATM1_PWR_Pin, GPIO_PIN_RESET);
 
   HAL_SuspendTick();
   /*

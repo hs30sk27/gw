@@ -17,7 +17,7 @@
  *  - BATT     uint8  (1=normal, 0=low)
  *  - TEMP     int8   ('C) range -50..100
  *  - BCN_CNT  uint16
- *  - X,Y,Z    int16 each
+ *  - X,Y,Z    uint16 each (0=invalid/test fail, valid=1..50000)
  *  - ADC      uint16
  *  - PULSE    uint32
  *  - SENSOR_EN 1 byte (bit0=ICM20948, bit1=ADC, bit2=PULSE)
@@ -58,9 +58,9 @@ typedef struct
 
     uint16_t beacon_cnt;
 
-    int16_t  x;
-    int16_t  y;
-    int16_t  z;
+    uint16_t x;
+    uint16_t y;
+    uint16_t z;
 
     uint16_t adc;
 

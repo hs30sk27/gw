@@ -28,9 +28,9 @@ typedef struct __attribute__((packed))
 {
     uint8_t  batt_lvl;   /* 1=normal, 0=low, 0xFF=invalid */
     int8_t   temp_c;     /* -50..100'C, UI_NODE_TEMP_INVALID_C=invalid */
-    int16_t  x;
-    int16_t  y;
-    int16_t  z;
+    uint16_t x;
+    uint16_t y;
+    uint16_t z;
     uint16_t adc;
     uint32_t pulse_cnt;
 } GW_NodeRec_t;

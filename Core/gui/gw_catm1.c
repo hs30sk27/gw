@@ -2483,13 +2483,13 @@ static bool prv_node_valid(const GW_NodeRec_t* r)
     if (r->temp_c != UI_NODE_TEMP_INVALID_C) {
         return true;
     }
-    if ((uint16_t)r->x != 0xFFFFu) {
+    if (r->x != 0xFFFFu) {
         return true;
     }
-    if ((uint16_t)r->y != 0xFFFFu) {
+    if (r->y != 0xFFFFu) {
         return true;
     }
-    if ((uint16_t)r->z != 0xFFFFu) {
+    if (r->z != 0xFFFFu) {
         return true;
     }
     if (r->adc != 0xFFFFu) {
@@ -2700,9 +2700,9 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
 
         node_volt_text = prv_node_voltage_text(r->batt_lvl);
         node_temp_c = (int)r->temp_c;
-        icm_valid = (((uint16_t)r->x != 0xFFFFu) ||
-                     ((uint16_t)r->y != 0xFFFFu) ||
-                     ((uint16_t)r->z != 0xFFFFu));
+        icm_valid = ((r->x != 0xFFFFu) ||
+                     (r->y != 0xFFFFu) ||
+                     (r->z != 0xFFFFu));
 
         prv_append_fmt(out, out_sz, &len,
                        ",ND:%02lu,V:%s,T:%d",
@@ -2712,10 +2712,10 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
 
         if (icm_valid) {
             prv_append_fmt(out, out_sz, &len,
-                           ",X:%d,Y:%d,Z:%d",
-                           (int)r->x,
-                           (int)r->y,
-                           (int)r->z);
+                           ",X:%u,Y:%u,Z:%u",
+                           (unsigned)r->x,
+                           (unsigned)r->y,
+                           (unsigned)r->z);
         }
         if (r->adc != 0xFFFFu) {
             prv_append_fmt(out, out_sz, &len,

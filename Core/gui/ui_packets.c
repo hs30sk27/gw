@@ -93,9 +93,9 @@ uint8_t UI_Pkt_BuildNodeData(uint8_t out[UI_NODE_PAYLOAD_LEN],
     p[0] = (uint8_t)in->temp_c; p += 1;
     prv_put_u16_le(p, in->beacon_cnt); p += 2;
 
-    prv_put_u16_le(p, (uint16_t)in->x); p += 2;
-    prv_put_u16_le(p, (uint16_t)in->y); p += 2;
-    prv_put_u16_le(p, (uint16_t)in->z); p += 2;
+    prv_put_u16_le(p, in->x); p += 2;
+    prv_put_u16_le(p, in->y); p += 2;
+    prv_put_u16_le(p, in->z); p += 2;
 
     prv_put_u16_le(p, in->adc); p += 2;
     prv_put_u32_le(p, in->pulse_cnt); p += 4;
@@ -124,9 +124,9 @@ bool UI_Pkt_ParseNodeData(const uint8_t* buf, uint16_t len, UI_NodeData_t* out)
     out->temp_c = (int8_t)p[0]; p += 1;
     out->beacon_cnt = prv_get_u16_le(p); p += 2;
 
-    out->x = (int16_t)prv_get_u16_le(p); p += 2;
-    out->y = (int16_t)prv_get_u16_le(p); p += 2;
-    out->z = (int16_t)prv_get_u16_le(p); p += 2;
+    out->x = prv_get_u16_le(p); p += 2;
+    out->y = prv_get_u16_le(p); p += 2;
+    out->z = prv_get_u16_le(p); p += 2;
 
     out->adc = prv_get_u16_le(p); p += 2;
     out->pulse_cnt = prv_get_u32_le(p); p += 4;

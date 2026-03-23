@@ -163,9 +163,9 @@ static bool prv_rec_cb(const GW_StorageFileInfo_t* info,
         bool valid = false;
         if (nr->batt_lvl != UI_NODE_BATT_LVL_INVALID) valid = true;
         if (nr->temp_c != UI_NODE_TEMP_INVALID_C) valid = true;
-        if ((uint16_t)nr->x != 0xFFFFu) valid = true;
-        if ((uint16_t)nr->y != 0xFFFFu) valid = true;
-        if ((uint16_t)nr->z != 0xFFFFu) valid = true;
+        if (nr->x != 0xFFFFu) valid = true;
+        if (nr->y != 0xFFFFu) valid = true;
+        if (nr->z != 0xFFFFu) valid = true;
         if (nr->adc != 0xFFFFu) valid = true;
         if (nr->pulse_cnt != 0xFFFFFFFFu) valid = true;
         if (!valid)
@@ -176,13 +176,13 @@ static bool prv_rec_cb(const GW_StorageFileInfo_t* info,
         prv_fmt_batt(bbuf, sizeof(bbuf), nr->batt_lvl);
         prv_fmt_temp_c(ntbuf, sizeof(ntbuf), nr->temp_c);
         (void)snprintf(ctx->line, sizeof(ctx->line),
-                       "ND:%02lu,B:%s,T:%s,X:%d,Y:%d,Z:%d,ADC:%u,PULSE:%lu\r\n",
+                       "ND:%02lu,B:%s,T:%s,X:%u,Y:%u,Z:%u,ADC:%u,PULSE:%lu\r\n",
                        (unsigned long)i,
                        bbuf,
                        ntbuf,
-                       (int)nr->x,
-                       (int)nr->y,
-                       (int)nr->z,
+                       (unsigned)nr->x,
+                       (unsigned)nr->y,
+                       (unsigned)nr->z,
                        (unsigned)nr->adc,
                        (unsigned long)nr->pulse_cnt);
         prv_send(ctx->line);

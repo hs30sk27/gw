@@ -351,14 +351,14 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
     GW_Storage_W25Q_PowerDown();
 
     /* 외부 부하가 남지 않도록 제어 핀을 저전력 상태로 고정 */
-    prv_force_stop_pin_levels();
+//    prv_force_stop_pin_levels();
 
     /* SW 상태 정리: 다음 wake-up 이후 재진입 시 꼬임 방지 */
     UI_Core_ClearFlagsBeforeStop();
     UI_GPIO_ClearEvents();
     UI_UART_ResetRxBuffer();
     UI_BLE_ClearFlagsBeforeStop();
-    prv_abort_peripheral_activity_before_deinit();
+//    prv_abort_peripheral_activity_before_deinit();
 #if defined(HAL_ADC_MODULE_ENABLED)
     (void)HAL_ADC_Stop(&hadc);
     (void)HAL_ADC_DeInit(&hadc);
@@ -378,7 +378,7 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
     prv_disable_spi_clock(&hspi1);
 #endif
 
-    prv_configure_deinited_pins_for_stop();
+//    prv_configure_deinited_pins_for_stop();
     /* stop 직전 남아 있는 EXTI/UART/radio NVIC pending을 비워 즉시 재기상 방지 */
     prv_clear_pending_irq_sources_before_stop();
 }

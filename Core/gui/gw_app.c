@@ -277,9 +277,9 @@ static uint8_t prv_count_valid_nodes_in_rec(const GW_HourRec_t* rec)
         const GW_NodeRec_t* n = &rec->nodes[i];
         if ((n->batt_lvl != UI_NODE_BATT_LVL_INVALID) ||
             (n->temp_c != UI_NODE_TEMP_INVALID_C) ||
-            (n->x != (int16_t)0xFFFFu) ||
-            (n->y != (int16_t)0xFFFFu) ||
-            (n->z != (int16_t)0xFFFFu) ||
+            (n->x != 0xFFFFu) ||
+            (n->y != 0xFFFFu) ||
+            (n->z != 0xFFFFu) ||
             (n->adc != 0xFFFFu) ||
             (n->pulse_cnt != 0xFFFFFFFFu)) {
             count++;
@@ -445,9 +445,9 @@ static void prv_hour_rec_init(uint32_t epoch_sec)
     for (uint32_t i = 0; i < UI_MAX_NODES; i++) {
         s_hour_rec.nodes[i].batt_lvl = UI_NODE_BATT_LVL_INVALID;
         s_hour_rec.nodes[i].temp_c = UI_NODE_TEMP_INVALID_C;
-        s_hour_rec.nodes[i].x = (int16_t)0xFFFFu;
-        s_hour_rec.nodes[i].y = (int16_t)0xFFFFu;
-        s_hour_rec.nodes[i].z = (int16_t)0xFFFFu;
+        s_hour_rec.nodes[i].x = 0xFFFFu;
+        s_hour_rec.nodes[i].y = 0xFFFFu;
+        s_hour_rec.nodes[i].z = 0xFFFFu;
         s_hour_rec.nodes[i].adc = 0xFFFFu;
         s_hour_rec.nodes[i].pulse_cnt = 0xFFFFFFFFu;
     }
@@ -1793,9 +1793,9 @@ void GW_App_Process(void)
 
                         r->batt_lvl = nd.batt_lvl;
                         r->temp_c = nd.temp_c;
-                        r->x = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.x : (int16_t)0xFFFFu;
-                        r->y = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.y : (int16_t)0xFFFFu;
-                        r->z = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.z : (int16_t)0xFFFFu;
+                        r->x = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.x : 0xFFFFu;
+                        r->y = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.y : 0xFFFFu;
+                        r->z = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.z : 0xFFFFu;
                         r->adc = ((sensor_en_mask & UI_SENSOR_EN_ADC) != 0u) ? nd.adc : 0xFFFFu;
                         r->pulse_cnt = ((sensor_en_mask & UI_SENSOR_EN_PULSE) != 0u) ? nd.pulse_cnt : 0xFFFFFFFFu;
                         if ((nd.node_num < s_rx_expected_nodes) && (nd.node_num < 64u)) {
