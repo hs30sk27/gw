@@ -61,7 +61,7 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #define GW_CATM1_NTP_TIMEOUT_MS (65000u)
 #endif
 #ifndef GW_CATM1_BOOT_URC_WAIT_MS
-#define GW_CATM1_BOOT_URC_WAIT_MS (15000u)
+#define GW_CATM1_BOOT_URC_WAIT_MS (5000u)
 #endif
 #ifndef GW_CATM1_BOOT_QUIET_MS
 #define GW_CATM1_BOOT_QUIET_MS (400u)
@@ -85,13 +85,21 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #define GW_CATM1_STARTUP_PS_WAIT_MS (10000u)
 #endif
 #ifndef GW_CATM1_STARTUP_CCLK_FIRST_TRY
-#define GW_CATM1_STARTUP_CCLK_FIRST_TRY (2u)
+#define GW_CATM1_STARTUP_CCLK_FIRST_TRY (3u)
 #endif
 #ifndef GW_CATM1_STARTUP_CCLK_POST_REG_TRY
 #define GW_CATM1_STARTUP_CCLK_POST_REG_TRY (3u)
 #endif
 #ifndef GW_CATM1_STARTUP_CCLK_POST_ATTACH_TRY
 #define GW_CATM1_STARTUP_CCLK_POST_ATTACH_TRY (2u)
+#endif
+#ifndef GW_CATM1_CCLK_NO_RSP_DIRECT_RETRY_MAX
+/* Power-on 직후에는 +CCLK? 응답이 잠깐 비는 경우가 있어,
+ * 바로 AT resync로 들어가기 전에 짧게 연속 재질의한다. */
+#define GW_CATM1_CCLK_NO_RSP_DIRECT_RETRY_MAX (3u)
+#endif
+#ifndef GW_CATM1_CCLK_NO_RSP_RETRY_GAP_MS
+#define GW_CATM1_CCLK_NO_RSP_RETRY_GAP_MS (150u)
 #endif
 #ifndef GW_CATM1_AT_SYNC_MAX_TRY
 #define GW_CATM1_AT_SYNC_MAX_TRY (4u)
@@ -143,6 +151,9 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #endif
 #ifndef GW_CATM1_POWER_CYCLE_GUARD_MS
 #define GW_CATM1_POWER_CYCLE_GUARD_MS (3500u)
+#endif
+#ifndef GW_CATM1_RECENT_POWEROFF_SKIP_MS
+#define GW_CATM1_RECENT_POWEROFF_SKIP_MS (1000u)
 #endif
 #ifndef GW_CATM1_SESSION_RESYNC_QUIET_MS
 #define GW_CATM1_SESSION_RESYNC_QUIET_MS (200u)
@@ -1070,8 +1081,13 @@ static bool prv_wait_boot_sms_ready(void)
     if (ready) {
         s_catm1_boot_sms_ready_seen = true;
         s_catm1_waiting_boot_sms_ready = false;
+        return true;
     }
-    return ready;
+
+    /* Boot window 안에 SMS Ready를 못 받으면 caller cleanup까지 기다리지 말고
+     * 여기서 바로 CAT-M1 power off로 내려 불필요한 on-state를 남기지 않는다. */
+    prv_shutdown_modem_prefer_poweroff();
+    return false;
 }
 
 static bool prv_try_session_resync(void)
@@ -1133,8 +1149,9 @@ static bool prv_start_session(bool enable_time_auto_update)
     s_catm1_waiting_boot_sms_ready = true;
 
     GW_Catm1_PowerOn();
-    prv_delay_ms(UI_CATM1_BOOT_WAIT_MS);
 
+    /* Power-on 시점부터 5초 안에 SMS Ready URC를 못 받으면 즉시 power off 한다.
+     * 기존의 고정 boot wait(5초) + 추가 URC wait(15초) 누적을 제거한다. */
     if (!prv_wait_boot_sms_ready()) {
         return false;
     }
@@ -1444,6 +1461,7 @@ static bool prv_query_network_time_epoch_retry(uint32_t max_try, uint32_t gap_ms
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
     uint32_t i;
+    uint8_t no_rsp_retry_streak = 0u;
 
     if ((out_epoch_centi == NULL) || (max_try == 0u)) {
         return false;
@@ -1453,12 +1471,27 @@ static bool prv_query_network_time_epoch_retry(uint32_t max_try, uint32_t gap_ms
         uint32_t query_start_ms = HAL_GetTick();
 
         if (!prv_send_query_wait_prefix_ok("AT+CCLK?\r\n", "+CCLK:", UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
-            (void)prv_try_session_resync();
+            uint32_t retry_gap_ms = gap_ms;
+
+            /* Power-on trace에서는 +CCLK? 무응답 뒤에 긴 AT resync 구간이 생겼다.
+             * 무응답 몇 번은 곧바로 +CCLK?만 다시 보내고, 그 뒤에만 세션 resync를 건다. */
+            no_rsp_retry_streak++;
+            if ((retry_gap_ms == 0u) || (retry_gap_ms > GW_CATM1_CCLK_NO_RSP_RETRY_GAP_MS)) {
+                retry_gap_ms = GW_CATM1_CCLK_NO_RSP_RETRY_GAP_MS;
+            }
+
+            if (no_rsp_retry_streak >= GW_CATM1_CCLK_NO_RSP_DIRECT_RETRY_MAX) {
+                (void)prv_try_session_resync();
+                no_rsp_retry_streak = 0u;
+            }
+
             if ((i + 1u) < max_try) {
-                prv_delay_ms(gap_ms);
+                prv_delay_ms(retry_gap_ms);
             }
             continue;
         }
+
+        no_rsp_retry_streak = 0u;
         if (prv_parse_cclk_epoch(rsp, out_epoch_centi)) {
             *out_epoch_centi = prv_compensate_cclk_epoch(*out_epoch_centi,
                                                          (uint32_t)(HAL_GetTick() - query_start_ms));
@@ -1698,24 +1731,42 @@ static bool prv_query_gnss_loc_line(char* out, size_t out_sz)
 static bool prv_parse_cereg_stat(const char* rsp, uint8_t* stat)
 {
     const char* p;
-    unsigned n = 0u;
-    unsigned v = 0u;
+    bool found = false;
+    uint8_t last_stat = 0u;
 
     if ((rsp == NULL) || (stat == NULL)) {
         return false;
     }
-    p = strstr(rsp, "+CEREG:");
-    if (p == NULL) {
+
+    p = rsp;
+    while ((p = strstr(p, "+CEREG:")) != NULL) {
+        const char* q = p + 7u;
+        unsigned a = 0u;
+        unsigned b = 0u;
+
+        while ((*q == ' ') || (*q == '\t')) {
+            q++;
+        }
+
+        /* Read response: +CEREG: <n>,<stat>[,...]
+         * URC (n=1/2):   +CEREG: <stat>[,...]
+         * Keep the last parsable status so mixed query/URC buffers still work. */
+        if (sscanf(q, "%u,%u", &a, &b) == 2) {
+            last_stat = (uint8_t)b;
+            found = true;
+        } else if (sscanf(q, "%u", &a) == 1) {
+            last_stat = (uint8_t)a;
+            found = true;
+        }
+
+        p = q;
+    }
+
+    if (!found) {
         return false;
     }
-    while (strstr(p + 1, "+CEREG:") != NULL) {
-        p = strstr(p + 1, "+CEREG:");
-    }
-    if ((sscanf(p, "+CEREG: %u,%u", &n, &v) != 2) && (sscanf(p, "+CEREG:%u,%u", &n, &v) != 2)) {
-        return false;
-    }
-    (void)n;
-    *stat = (uint8_t)v;
+
+    *stat = last_stat;
     return true;
 }
 
@@ -2053,7 +2104,7 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
     uint8_t cid = 0xFFu;
     uint8_t result = 0xFFu;
     uint32_t start;
-    uint32_t timeout_ms = GW_CATM1_TCP_OPEN_SUCCESS_URC_TIMEOUT_MS;
+    uint32_t timeout_ms = GW_CATM1_TCP_OPEN_HARD_TIMEOUT_MS;
     size_t n = 0u;
 
     s_catm1_tcp_open_fail_powerdown_pending = false;
@@ -2119,7 +2170,8 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
         }
     }
 
-    /* +CAOPEN: 0,0 이 2초 안에 없으면 여기서 바로 power off 한다. */
+    /* +CAOPEN result URC는 망 상태에 따라 수 초 늦게 올 수 있으므로
+     * hard timeout까지 기다린 뒤에만 실패 처리한다. */
     prv_abort_tcp_open_and_power_off(start);
     return false;
 }
@@ -2966,7 +3018,9 @@ retry_after_power_cycle:
     if (!prv_start_session(false)) {
         if (!retried) {
             retried = true;
-            prv_force_power_cut();
+            if (!prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
+                prv_force_power_cut();
+            }
             goto retry_after_power_cycle;
         }
         goto cleanup;
@@ -3027,7 +3081,9 @@ retry_after_power_cycle:
 
 cleanup:
     prv_delay_ms(GW_CATM1_POST_TIME_SYNC_POWER_CUT_GUARD_MS);
-    prv_shutdown_modem_prefer_poweroff();
+    if (!prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
+        prv_shutdown_modem_prefer_poweroff();
+    }
     prv_lpuart_release();
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
@@ -3074,7 +3130,9 @@ bool GW_Catm1_QueryAndStoreLoc(char* out_line, size_t out_sz)
     success = true;
 
 cleanup:
-    GW_Catm1_PowerOff();
+    if (!prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
+        GW_Catm1_PowerOff();
+    }
     prv_lpuart_release();
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
