@@ -16,6 +16,7 @@ extern UART_HandleTypeDef hlpuart1;
 extern bool GW_Storage_SaveHourRec(const GW_HourRec_t* rec);
 extern uint32_t GW_Storage_GetTotalRecordCount(void);
 extern void UI_Hook_OnTimeChanged(void);
+extern void UI_Hook_OnBootTimeSyncBeaconRequested(void);
 
 static volatile bool s_catm1_busy = false;
 static volatile bool s_catm1_session_at_ok = false;
@@ -39,6 +40,7 @@ static bool s_catm1_bandcfg_applied_this_power = false;
  * 다만 boot-time sync 성공 처리는 실제 +CCLK?를 받아 최종 시간을 반영한 뒤에만 완료한다. */
 static bool s_catm1_time_synced_from_urc_this_power = false;
 static bool s_catm1_tcp_time_sync_pending = false;
+static bool s_catm1_boot_time_sync_strict_order_active = false;
 static volatile bool s_catm1_server_cmd_ind_seen = false;
 
 static bool s_failed_snapshot_queued_valid = false;
@@ -389,6 +391,7 @@ static bool prv_have_time_from_boot_urc_this_power(void);
 static bool prv_force_cclk_time_sync(uint32_t max_try, uint32_t gap_ms, bool notify_hook);
 static bool prv_force_cclk_time_sync_after_ctzu(bool notify_hook);
 static bool prv_finish_time_sync_from_boot_urc(bool notify_hook);
+static bool prv_sync_time_startup_ntp_then_network(void);
 
 static void prv_catm1_rb_reset(void)
 {
@@ -597,7 +600,12 @@ static bool prv_try_consume_async_urc_line(const char* line, size_t line_len)
     tmp[copy_len] = '\0';
 
     if (prv_parse_psuttz_epoch(tmp, &epoch_centi)) {
-        prv_apply_time_epoch(epoch_centi, true);
+        /* Boot-time strict ordering에서는 APN -> NTP 우선 -> CCLK fallback 순서를 유지해야 하므로,
+         * power-on time-sync 세션 동안에는 *PSUTTZ를 즉시 RTC에 반영하지 않고
+         * "시간 URC를 본 적이 있다"는 사실만 기록한다. */
+        if (!s_catm1_boot_time_sync_strict_order_active) {
+            prv_apply_time_epoch(epoch_centi, true);
+        }
         s_catm1_time_synced_from_urc_this_power = true;
     }
     return true;
@@ -1172,6 +1180,15 @@ static bool prv_start_session(bool enable_time_auto_update)
         return false;
     }
 
+    /* MCU power-on 직후 time-sync 전용 세션에서는
+     * CPIN READY 다음 첫 네트워크 설정을 반드시 APN bootstrap으로 고정한다.
+     * 따라서 여기서는 legacy attach restore/CEREG/CTZU 선행을 건너뛰고 caller가
+     * 즉시 prv_prepare_apn_before_time_sync()로 들어가게 한다. */
+    if (!enable_time_auto_update) {
+        prv_wait_rx_quiet(100u, 400u);
+        return true;
+    }
+
     /* 이전 동작 로그에서는 세션 시작 시 CFUN=0 bootstrap 없이 기존 attach 상태를 그대로 사용했다.
      * 전송 세션에서는 여기서 모뎀을 다시 내려 등록을 깨지 말고, legacy attach profile만 best-effort로 복구한다. */
     prv_try_restore_legacy_attach_profile();
@@ -1521,25 +1538,103 @@ static bool prv_query_network_time_epoch(uint64_t* out_epoch_centi)
     return prv_query_network_time_epoch_retry(max_try, UI_CATM1_TIME_SYNC_GAP_MS, true, NULL, out_epoch_centi);
 }
 
+static bool prv_parse_cntp_result(const char* rsp, uint8_t* out_code)
+{
+    const char* p;
+    unsigned code = 0u;
+
+    if ((rsp == NULL) || (out_code == NULL)) {
+        return false;
+    }
+
+    p = rsp;
+    while ((p = strstr(p, "+CNTP:")) != NULL) {
+        if ((sscanf(p, "+CNTP: %u", &code) == 1) ||
+            (sscanf(p, "+CNTP:%u", &code) == 1)) {
+            *out_code = (uint8_t)code;
+            return true;
+        }
+        p += 6;
+    }
+
+    return false;
+}
+
 static bool prv_ntp_sync_time(uint64_t* out_epoch_centi)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
     char cmd[96];
+    uint8_t cntp_code = 0u;
 
     if (out_epoch_centi == NULL) {
         return false;
     }
 
+    rsp[0] = '\0';
     (void)prv_send_cmd_wait("AT+CNTPCID=0\r\n", "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp));
-    (void)snprintf(cmd, sizeof(cmd), "AT+CNTP=\"%s\",%d,0,1\r\n", GW_CATM1_NTP_HOST, GW_CATM1_NTP_TZ_QH);
+
+    /* SIM7080 CNTP mode 0 updates local time, and the manual recommends
+     * querying AT+CCLK after a successful synchronization. */
+    (void)snprintf(cmd, sizeof(cmd), "AT+CNTP=\"%s\",%d,0,0\r\n", GW_CATM1_NTP_HOST, GW_CATM1_NTP_TZ_QH);
+    rsp[0] = '\0';
     if (!prv_send_cmd_wait(cmd, "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
         return false;
     }
+
+    rsp[0] = '\0';
     if (!prv_send_cmd_wait("AT+CNTP\r\n", "+CNTP:", NULL, NULL, GW_CATM1_NTP_TIMEOUT_MS, rsp, sizeof(rsp))) {
         return false;
     }
+    if (!prv_parse_cntp_result(rsp, &cntp_code) || (cntp_code != 1u)) {
+        return false;
+    }
+
     prv_delay_ms(1000u);
     return prv_query_network_time_epoch_retry(6u, 1000u, false, NULL, out_epoch_centi);
+}
+
+static bool prv_sync_time_startup_ntp_then_network(void)
+{
+    uint64_t epoch_centi = 0u;
+    bool reg_ok = false;
+    bool ps_ok = false;
+
+    if (!prv_prepare_apn_before_time_sync()) {
+        return false;
+    }
+
+    /* Boot-time sync 순서는 SMS Ready 이후
+     * CFUN/APN bootstrap -> 망 등록 확인 -> 시간 읽기(NTP 우선, 실패 시 +CCLK fallback)로 고정한다.
+     * 따라서 등록이 확인되기 전에는 CCLK/PSUTTZ 기반 성공 처리로 빠지지 않는다. */
+    prv_enable_network_time_auto_update();
+    prv_wait_rx_quiet(100u, 400u);
+
+    reg_ok = prv_wait_eps_registered_until(GW_CATM1_STARTUP_REG_WAIT_MS);
+    if (!reg_ok) {
+        return false;
+    }
+
+    ps_ok = prv_wait_ps_attached_until(GW_CATM1_STARTUP_PS_WAIT_MS);
+    if (ps_ok && prv_activate_pdp() && prv_ntp_sync_time(&epoch_centi)) {
+        prv_apply_time_epoch(epoch_centi, true);
+        return true;
+    }
+
+    /* NTP server 접속/동기 실패 시에도, EPS 등록이 확인된 뒤에만 기지국 시간을 CCLK로 읽는다. */
+    if (prv_force_cclk_time_sync_after_ctzu(true)) {
+        return true;
+    }
+
+    if (prv_query_network_time_epoch_retry(GW_CATM1_STARTUP_CCLK_RETRY,
+                                           GW_CATM1_STARTUP_CCLK_GAP_MS,
+                                           false,
+                                           NULL,
+                                           &epoch_centi)) {
+        prv_apply_time_epoch(epoch_centi, true);
+        return true;
+    }
+
+    return false;
 }
 
 static bool prv_sync_time_from_modem_startup_try(bool run_time_auto_update_setup,
@@ -3001,12 +3096,12 @@ bool GW_Catm1_SyncTimeOnce(void)
 {
     bool success = false;
     bool retried = false;
-    bool time_auto_update_used = false;
-    bool initial_invalid_cclk = false;
 
     if (GW_Catm1_IsBusy()) {
         return false;
     }
+
+    s_catm1_boot_time_sync_strict_order_active = true;
 
     UI_LPM_LockStop();
     GW_Catm1_SetBusy(true);
@@ -3026,52 +3121,7 @@ retry_after_power_cycle:
         goto cleanup;
     }
 
-    /* Boot URC(*PSUTTZ)로 시간이 먼저 들어왔더라도 여기서 바로 성공으로 끝내지 않고,
-     * 이후 CTZU/CCLK 경로에서 실제 +CCLK? 응답을 받은 뒤에만 성공 처리한다. */
-    if (prv_finish_time_sync_from_boot_urc(true)) {
-        success = true;
-        goto cleanup;
-    }
-
-    if (!prv_prepare_apn_before_time_sync()) {
-        if (!retried) {
-            retried = true;
-            prv_force_power_cut();
-            goto retry_after_power_cycle;
-        }
-        goto cleanup;
-    }
-
-    if (prv_finish_time_sync_from_boot_urc(true)) {
-        success = true;
-        goto cleanup;
-    }
-
-    prv_enable_network_time_auto_update();
-
-    /* boot-time 경로에서는 PSUTTZ 유무와 무관하게 중간에 반드시 AT+CCLK?를 직접 읽고,
-     * 그 반환값으로 RTC를 최종 반영한다. */
-    if (prv_force_cclk_time_sync_after_ctzu(true)) {
-        success = true;
-        goto cleanup;
-    }
-    if (prv_finish_time_sync_from_boot_urc(true)) {
-        success = true;
-        goto cleanup;
-    }
-    time_auto_update_used = s_catm1_time_auto_update_attempted_this_power;
-    if (time_auto_update_used) {
-        s_catm1_time_auto_update_attempted_this_power = true;
-    }
-
-    success = prv_sync_time_from_modem_startup_try(!time_auto_update_used,
-                                                   !retried,
-                                                   &initial_invalid_cclk);
-    time_auto_update_used = time_auto_update_used || s_catm1_time_auto_update_attempted_this_power;
-
-    if ((!success) && prv_finish_time_sync_from_boot_urc(true)) {
-        success = true;
-    }
+    success = prv_sync_time_startup_ntp_then_network();
 
     if (!success && !retried) {
         retried = true;
@@ -3087,6 +3137,12 @@ cleanup:
     prv_lpuart_release();
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
+    s_catm1_boot_time_sync_strict_order_active = false;
+
+    if (success) {
+        UI_Hook_OnBootTimeSyncBeaconRequested();
+    }
+
     return success;
 }
 

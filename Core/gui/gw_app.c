@@ -155,6 +155,7 @@ static uint32_t s_sync_wait_deadline_ms = 0u;
 static bool s_led1_sync_blink_active = false;
 static bool s_led1_sync_blink_on = false;
 static bool s_dormant_stop_mode = false;
+static bool s_boot_time_sync_beacon_pending = false;
 
 #define GW_BEACON_BURST_COUNT_NORMAL   (3u)
 #define GW_BEACON_BURST_COUNT_RECOVERY (5u)
@@ -188,6 +189,15 @@ static bool prv_arm_rx_slot(void);
 static bool prv_rearm_current_rx_slot(void);
 static void prv_rx_next_slot(void);
 static bool prv_start_beacon_tx(uint32_t now_sec);
+static uint8_t prv_get_beacon_burst_count(void);
+static void prv_prepare_beacon_burst(uint32_t anchor_sec,
+                                    uint8_t total_count,
+                                    uint32_t gap_ms,
+                                    GW_BeaconTxKind_t kind,
+                                    uint32_t periodic_slot_id);
+static uint32_t prv_get_beacon_offset_sec(void);
+static uint32_t prv_get_beacon_interval_sec(void);
+static void prv_schedule_next_second_tick(uint64_t now_centi);
 static void prv_reset_rx_cycle_state(void);
 static void prv_abort_active_radio_session(void);
 static uint32_t prv_get_sync_wait_remaining_ms(void);
@@ -220,6 +230,54 @@ static void prv_flash_tx_note_sent(uint32_t sent_count);
 static void prv_exit_dormant_stop_mode(void);
 static void prv_led1_sync_blink_stop(void);
 static void prv_request_schedule_recheck_now(void);
+static bool prv_handle_boot_time_sync_beacon(void);
+static void prv_mark_periodic_beacon_slot_consumed_if_due(uint32_t epoch_sec);
+
+static void prv_mark_periodic_beacon_slot_consumed_if_due(uint32_t epoch_sec)
+{
+    uint32_t beacon_interval = prv_get_beacon_interval_sec();
+    uint32_t beacon_off = prv_get_beacon_offset_sec();
+
+    if ((beacon_interval == 0u) || ((epoch_sec % beacon_interval) != beacon_off)) {
+        return;
+    }
+
+    s_last_periodic_beacon_slot_id = prv_beacon_slot_id_from_epoch_sec(epoch_sec, beacon_interval, beacon_off);
+}
+
+static bool prv_handle_boot_time_sync_beacon(void)
+{
+    uint64_t now_centi;
+    uint32_t now_sec;
+
+    if (!s_boot_time_sync_beacon_pending) {
+        return false;
+    }
+    if ((s_state != GW_STATE_IDLE) || GW_Catm1_IsBusy()) {
+        return false;
+    }
+
+    now_centi = UI_Time_NowCenti2016();
+    if ((now_centi % 100u) != 0u) {
+        prv_schedule_next_second_tick(now_centi);
+        return true;
+    }
+
+    now_sec = (uint32_t)(now_centi / 100u);
+    prv_prepare_beacon_burst(now_sec,
+                             prv_get_beacon_burst_count(),
+                             GW_BEACON_BURST_GAP_MS,
+                             GW_BEACON_TX_KIND_MANUAL,
+                             0xFFFFFFFFu);
+    if (prv_start_pending_beacon_burst()) {
+        s_boot_time_sync_beacon_pending = false;
+        prv_mark_periodic_beacon_slot_consumed_if_due(now_sec);
+        return true;
+    }
+
+    prv_schedule_next_second_tick(UI_Time_NowCenti2016());
+    return true;
+}
 
 static void prv_cancel_pending_beacon_burst(void)
 {
@@ -1718,6 +1776,11 @@ void GW_App_Process(void)
             return;
         }
     }
+
+    if (prv_handle_boot_time_sync_beacon()) {
+        return;
+    }
+
     if (ev == 0u) {
         return;
     }
@@ -2098,6 +2161,10 @@ static void prv_schedule_wakeup(void)
 
     prv_update_test_mode();
     now_centi = UI_Time_NowCenti2016();
+    if (s_boot_time_sync_beacon_pending) {
+        prv_schedule_next_second_tick(now_centi);
+        return;
+    }
     if (s_beacon_oneshot_pending) {
         prv_schedule_after_ms(10u);
         return;
@@ -2216,6 +2283,7 @@ void GW_App_Init(void)
     s_led1_sync_blink_active = false;
     s_led1_sync_blink_on = false;
     s_dormant_stop_mode = false;
+    s_boot_time_sync_beacon_pending = false;
     /* MCU 부팅 때마다 CAT-M1 one-shot 시간 확인을 수행한다.
      * 다만 boot URC(*PSUTTZ)로 시간이 이미 들어온 세션에서는 gw_catm1 쪽에서
      * +CCLK?만 짧게 확인하고 무거운 bootstrap/retry는 생략한다. */
@@ -2241,6 +2309,7 @@ void UI_Hook_OnConfigChanged(void)
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     s_last_periodic_beacon_slot_id = 0xFFFFFFFFu;
+    s_boot_time_sync_beacon_pending = false;
     prv_update_test_mode();
     prv_schedule_wakeup();
 }
@@ -2290,7 +2359,18 @@ void UI_Hook_OnTimeChanged(void)
     s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
     s_last_periodic_beacon_slot_id = 0xFFFFFFFFu;
+    s_boot_time_sync_beacon_pending = false;
     prv_schedule_wakeup();
+}
+
+void UI_Hook_OnBootTimeSyncBeaconRequested(void)
+{
+    if (!s_inited) {
+        return;
+    }
+
+    s_boot_time_sync_beacon_pending = true;
+    prv_request_schedule_recheck_now();
 }
 
 void UI_Hook_OnTestStartRequested(void)
