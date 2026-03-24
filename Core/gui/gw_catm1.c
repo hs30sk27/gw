@@ -1707,24 +1707,42 @@ static bool prv_query_gnss_loc_line(char* out, size_t out_sz)
 static bool prv_parse_cereg_stat(const char* rsp, uint8_t* stat)
 {
     const char* p;
-    unsigned n = 0u;
-    unsigned v = 0u;
+    bool found = false;
+    uint8_t last_stat = 0u;
 
     if ((rsp == NULL) || (stat == NULL)) {
         return false;
     }
-    p = strstr(rsp, "+CEREG:");
-    if (p == NULL) {
+
+    p = rsp;
+    while ((p = strstr(p, "+CEREG:")) != NULL) {
+        const char* q = p + 7u;
+        unsigned a = 0u;
+        unsigned b = 0u;
+
+        while ((*q == ' ') || (*q == '\t')) {
+            q++;
+        }
+
+        /* Read response: +CEREG: <n>,<stat>[,...]
+         * URC (n=1/2):   +CEREG: <stat>[,...]
+         * Keep the last parsable status so mixed query/URC buffers still work. */
+        if (sscanf(q, "%u,%u", &a, &b) == 2) {
+            last_stat = (uint8_t)b;
+            found = true;
+        } else if (sscanf(q, "%u", &a) == 1) {
+            last_stat = (uint8_t)a;
+            found = true;
+        }
+
+        p = q;
+    }
+
+    if (!found) {
         return false;
     }
-    while (strstr(p + 1, "+CEREG:") != NULL) {
-        p = strstr(p + 1, "+CEREG:");
-    }
-    if ((sscanf(p, "+CEREG: %u,%u", &n, &v) != 2) && (sscanf(p, "+CEREG:%u,%u", &n, &v) != 2)) {
-        return false;
-    }
-    (void)n;
-    *stat = (uint8_t)v;
+
+    *stat = last_stat;
     return true;
 }
 
@@ -2062,7 +2080,7 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
     uint8_t cid = 0xFFu;
     uint8_t result = 0xFFu;
     uint32_t start;
-    uint32_t timeout_ms = GW_CATM1_TCP_OPEN_SUCCESS_URC_TIMEOUT_MS;
+    uint32_t timeout_ms = GW_CATM1_TCP_OPEN_HARD_TIMEOUT_MS;
     size_t n = 0u;
 
     s_catm1_tcp_open_fail_powerdown_pending = false;
@@ -2128,7 +2146,8 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
         }
     }
 
-    /* +CAOPEN: 0,0 이 2초 안에 없으면 여기서 바로 power off 한다. */
+    /* +CAOPEN result URC는 망 상태에 따라 수 초 늦게 올 수 있으므로
+     * hard timeout까지 기다린 뒤에만 실패 처리한다. */
     prv_abort_tcp_open_and_power_off(start);
     return false;
 }
