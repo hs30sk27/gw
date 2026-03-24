@@ -144,6 +144,9 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_POWER_CYCLE_GUARD_MS
 #define GW_CATM1_POWER_CYCLE_GUARD_MS (3500u)
 #endif
+#ifndef GW_CATM1_RECENT_POWEROFF_SKIP_MS
+#define GW_CATM1_RECENT_POWEROFF_SKIP_MS (1000u)
+#endif
 #ifndef GW_CATM1_SESSION_RESYNC_QUIET_MS
 #define GW_CATM1_SESSION_RESYNC_QUIET_MS (200u)
 #endif
@@ -1070,8 +1073,13 @@ static bool prv_wait_boot_sms_ready(void)
     if (ready) {
         s_catm1_boot_sms_ready_seen = true;
         s_catm1_waiting_boot_sms_ready = false;
+        return true;
     }
-    return ready;
+
+    /* Boot window 안에 SMS Ready를 못 받으면 caller cleanup까지 기다리지 말고
+     * 여기서 바로 CAT-M1 power off로 내려 불필요한 on-state를 남기지 않는다. */
+    prv_shutdown_modem_prefer_poweroff();
+    return false;
 }
 
 static bool prv_try_session_resync(void)
@@ -2966,7 +2974,9 @@ retry_after_power_cycle:
     if (!prv_start_session(false)) {
         if (!retried) {
             retried = true;
-            prv_force_power_cut();
+            if (!prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
+                prv_force_power_cut();
+            }
             goto retry_after_power_cycle;
         }
         goto cleanup;
@@ -3027,7 +3037,9 @@ retry_after_power_cycle:
 
 cleanup:
     prv_delay_ms(GW_CATM1_POST_TIME_SYNC_POWER_CUT_GUARD_MS);
-    prv_shutdown_modem_prefer_poweroff();
+    if (!prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
+        prv_shutdown_modem_prefer_poweroff();
+    }
     prv_lpuart_release();
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
@@ -3074,7 +3086,9 @@ bool GW_Catm1_QueryAndStoreLoc(char* out_line, size_t out_sz)
     success = true;
 
 cleanup:
-    GW_Catm1_PowerOff();
+    if (!prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
+        GW_Catm1_PowerOff();
+    }
     prv_lpuart_release();
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
