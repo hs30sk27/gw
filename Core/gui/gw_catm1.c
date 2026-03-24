@@ -61,7 +61,7 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #define GW_CATM1_NTP_TIMEOUT_MS (65000u)
 #endif
 #ifndef GW_CATM1_BOOT_URC_WAIT_MS
-#define GW_CATM1_BOOT_URC_WAIT_MS (15000u)
+#define GW_CATM1_BOOT_URC_WAIT_MS (5000u)
 #endif
 #ifndef GW_CATM1_BOOT_QUIET_MS
 #define GW_CATM1_BOOT_QUIET_MS (400u)
@@ -1141,8 +1141,9 @@ static bool prv_start_session(bool enable_time_auto_update)
     s_catm1_waiting_boot_sms_ready = true;
 
     GW_Catm1_PowerOn();
-    prv_delay_ms(UI_CATM1_BOOT_WAIT_MS);
 
+    /* Power-on 시점부터 5초 안에 SMS Ready URC를 못 받으면 즉시 power off 한다.
+     * 기존의 고정 boot wait(5초) + 추가 URC wait(15초) 누적을 제거한다. */
     if (!prv_wait_boot_sms_ready()) {
         return false;
     }
