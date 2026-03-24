@@ -39,7 +39,7 @@ static char s_ble_name_cmd_alt_buf[48];
 #define UI_BLE_NAMECFG_PWR_OFF_MS      300u
 #define UI_BLE_NAMECFG_BOOT_SETTLE_MS 1200u
 #define UI_BLE_NAMECFG_CMD_GAP_MS      120u
-#define UI_BLE_NAMECFG_RESET_SETTLE_MS 300u
+#define UI_BLE_NAMECFG_RESTART_OFF_MS  300u
 
 /* timer callback은 ISR 컨텍스트로 동작할 수 있으므로 task로 defer */
 static void prv_tmr_timeout_cb(void *context)
@@ -330,6 +330,10 @@ bool UI_BLE_ApplyDeviceName(const char* name_ascii)
         return false;
     }
 
+    /*
+     * 요구 순서:
+     *   BLE OFF -> delay -> BLE ON -> delay -> 이름 변경 -> delay -> BLE OFF -> delay -> BLE ON
+     */
     UI_BLE_Disable();
     HAL_Delay(UI_BLE_NAMECFG_PWR_OFF_MS);
 
@@ -350,8 +354,8 @@ bool UI_BLE_ApplyDeviceName(const char* name_ascii)
     UI_UART_SendString(s_ble_name_cmd_alt_buf);
     HAL_Delay(UI_BLE_NAMECFG_CMD_GAP_MS);
 
-    UI_UART_SendString("AT+RESET\r\n");
-    HAL_Delay(UI_BLE_NAMECFG_RESET_SETTLE_MS);
+    UI_BLE_Disable();
+    HAL_Delay(UI_BLE_NAMECFG_RESTART_OFF_MS);
 
     UI_BLE_EnableForMs(UI_BLE_ACTIVE_MS);
     if (persistent)

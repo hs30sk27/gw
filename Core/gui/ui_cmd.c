@@ -348,6 +348,13 @@ static void prv_send_setting_read(void)
     UI_UART_SendString(line);
 }
 
+static void prv_apply_gw_ble_name(uint8_t gw_num)
+{
+    char ble_name[16];
+    (void)snprintf(ble_name, sizeof(ble_name), "GW NUM %u", (unsigned)gw_num);
+    (void)UI_BLE_ApplyDeviceName(ble_name);
+}
+
 static void prv_process_line_impl(const char* line_in, bool silent)
 {
     s_cmd_silent_reply = silent;
@@ -515,7 +522,9 @@ static void prv_process_line_impl(const char* line_in, bool silent)
         }
         if (v <= 2u) {
             UI_SetGwNum(v);
-            (void)prv_commit_config_changed();
+            if (prv_commit_config_changed()) {
+                prv_apply_gw_ble_name(v);
+            }
         } else {
             prv_send_error();
         }

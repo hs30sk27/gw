@@ -31,6 +31,9 @@ void UI_BLE_Disable(void);
 
 bool UI_BLE_IsActive(void);
 
+/* DX-BT05 이름 변경: 예) "GW NUM 1" */
+bool UI_BLE_ApplyDeviceName(const char* name_ascii);
+
 /* TEST START 세션 등에서 BLE 자동 종료를 막는 유지 모드 */
 void UI_BLE_SetPersistent(bool enable);
 bool UI_BLE_IsPersistent(void);
