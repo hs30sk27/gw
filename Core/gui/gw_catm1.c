@@ -1180,12 +1180,15 @@ static bool prv_start_session(bool enable_time_auto_update)
         return false;
     }
 
-    /* MCU power-on 직후 time-sync 전용 세션에서는
-     * CPIN READY 다음 첫 네트워크 설정을 반드시 APN bootstrap으로 고정한다.
-     * 따라서 여기서는 legacy attach restore/CEREG/CTZU 선행을 건너뛰고 caller가
-     * 즉시 prv_prepare_apn_before_time_sync()로 들어가게 한다. */
+    /* MCU power-on 직후 boot time-sync 세션에서는
+     * 시간이 이미 살아 있어 보여도(SIM7080 전원 유지, *PSUTTZ/CCLK 잔존 등)
+     * SMS Ready/CPIN READY 다음 첫 세팅을 항상 APN bootstrap으로 강제한다.
+     * 그래서 time-sync 단계에 들어가기 전에 여기서 먼저 APN/PDP profile을 확정한다. */
     if (!enable_time_auto_update) {
         prv_wait_rx_quiet(100u, 400u);
+        if (!prv_prepare_apn_before_time_sync()) {
+            return false;
+        }
         return true;
     }
 
@@ -3102,6 +3105,9 @@ bool GW_Catm1_SyncTimeOnce(void)
     }
 
     s_catm1_boot_time_sync_strict_order_active = true;
+    /* MCU가 다시 부팅된 경우라도 boot one-shot sync에서는
+     * 첫 세팅을 무조건 APN bootstrap으로 다시 보장한다. */
+    s_catm1_startup_apn_configured_this_power = false;
 
     UI_LPM_LockStop();
     GW_Catm1_SetBusy(true);
