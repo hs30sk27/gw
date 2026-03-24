@@ -187,6 +187,15 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS
 #define GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS (5000u)
 #endif
+#ifndef GW_CATM1_APN_VERIFY_RETRY_MAX
+#define GW_CATM1_APN_VERIFY_RETRY_MAX (3u)
+#endif
+#ifndef GW_CATM1_APN_VERIFY_GAP_MS
+#define GW_CATM1_APN_VERIFY_GAP_MS (300u)
+#endif
+#ifndef GW_CATM1_APN_POST_CFUN1_SMS_READY_TIMEOUT_MS
+#define GW_CATM1_APN_POST_CFUN1_SMS_READY_TIMEOUT_MS (5000u)
+#endif
 #ifndef GW_CATM1_BANDCFG_TIMEOUT_MS
 #define GW_CATM1_BANDCFG_TIMEOUT_MS (10000u)
 #endif
@@ -1237,13 +1246,61 @@ static void prv_try_apply_korea_catm_bands(void)
     }
 }
 
+static bool prv_wait_sms_ready_after_cfun1(uint32_t timeout_ms)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+
+    if (timeout_ms == 0u) {
+        return false;
+    }
+
+    rsp[0] = '\0';
+    return prv_uart_wait_for(rsp, sizeof(rsp), timeout_ms, "SMS Ready", NULL, NULL);
+}
+
+static bool prv_apply_bootstrap_apn_profile(bool verify_after_set)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+    char cmd[96];
+
+    (void)snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"\r\n", UI_CATM1_1NCE_APN);
+    rsp[0] = '\0';
+    if (!prv_send_cmd_wait(cmd, "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+
+    prv_wait_rx_quiet(100u, 400u);
+
+    /* Legacy working trace used auth/profile tail 0 during the bootstrap-only time-sync session.
+     * Real data sessions still switch to ...,1 inside prv_activate_pdp(). */
+    (void)snprintf(cmd, sizeof(cmd), "AT+CNCFG=0,1,\"%s\",\"\",\"\",0\r\n", UI_CATM1_1NCE_APN);
+    rsp[0] = '\0';
+    if (!prv_send_cmd_wait(cmd, "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+
+    if (!verify_after_set) {
+        return true;
+    }
+
+    prv_wait_rx_quiet(100u, 400u);
+    rsp[0] = '\0';
+    if (!prv_send_query_wait_prefix_ok("AT+CGDCONT?\r\n", "+CGDCONT:",
+                                       UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+
+    return (strstr(rsp, UI_CATM1_1NCE_APN) != NULL);
+}
+
 
 static bool prv_prepare_apn_before_time_sync(void)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
-    char cmd[96];
     bool did_cfun0 = false;
     bool cpin_ready = false;
+    bool apn_verified = false;
+    uint32_t apn_try = 0u;
 
     if (s_catm1_startup_apn_configured_this_power) {
         return true;
@@ -1263,19 +1320,13 @@ static bool prv_prepare_apn_before_time_sync(void)
     /* Keep bootstrap aligned with the older working sequence:
      * CFUN=0 -> APN/PDP config -> CFUN=1.
      * Avoid forcing RAT/NB profile here because some field units stayed in
-     * long operator-search state after CNMP/CMNB changes. */
-    (void)snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"\r\n", UI_CATM1_1NCE_APN);
-    rsp[0] = '\0';
-    if (!prv_send_cmd_wait(cmd, "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
-        return false;
-    }
-
-    prv_wait_rx_quiet(100u, 400u);
-    /* Legacy working trace used auth/profile tail 0 during the bootstrap-only time-sync session.
-     * Real data sessions still switch to ...,1 inside prv_activate_pdp(). */
-    (void)snprintf(cmd, sizeof(cmd), "AT+CNCFG=0,1,\"%s\",\"\",\"\",0\r\n", UI_CATM1_1NCE_APN);
-    rsp[0] = '\0';
-    if (!prv_send_cmd_wait(cmd, "OK", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
+     * long operator-search state after CNMP/CMNB changes.
+     *
+     * 다만 현장 로그에서는 echo off 이후 bare OK만 남아 APN 설정 여부를 구분하기 어려웠다.
+     * 그래서 1차로 기존 CFUN=0 상태에서 profile을 써 두고,
+     * CFUN=1 복귀 후 SMS Ready가 다시 온 다음 같은 profile을 한 번 더 쓰고
+     * AT+CGDCONT?로 실제 APN 문자열까지 확인한 뒤에만 성공 처리한다. */
+    if (!prv_apply_bootstrap_apn_profile(false)) {
         return false;
     }
 
@@ -1299,6 +1350,8 @@ static bool prv_prepare_apn_before_time_sync(void)
             return false;
         }
 
+        (void)prv_wait_sms_ready_after_cfun1(GW_CATM1_APN_POST_CFUN1_SMS_READY_TIMEOUT_MS);
+
         prv_wait_rx_quiet(200u, 1200u);
         /* CFUN=1 직후에는 +CPIN: READY가 먼저 보여도 SIM/NAS 내부 기동이 남아 있을 수 있다.
          * 곧바로 COPS를 보내면 +CME ERROR: SIM failure가 튀고, 바로 다음 명령과 스트림이
@@ -1310,6 +1363,20 @@ static bool prv_prepare_apn_before_time_sync(void)
         if (!prv_request_auto_operator_select(true)) {
             prv_wait_rx_quiet(200u, GW_CATM1_COPS_AUTO_SETTLE_MS + 500u);
         }
+    }
+
+    for (apn_try = 0u; apn_try < GW_CATM1_APN_VERIFY_RETRY_MAX; apn_try++) {
+        apn_verified = prv_apply_bootstrap_apn_profile(true);
+        if (apn_verified) {
+            break;
+        }
+        prv_wait_rx_quiet(100u, 400u);
+        if ((apn_try + 1u) < GW_CATM1_APN_VERIFY_RETRY_MAX) {
+            prv_delay_ms(GW_CATM1_APN_VERIFY_GAP_MS);
+        }
+    }
+    if (!apn_verified) {
+        return false;
     }
 
     rsp[0] = '\0';
