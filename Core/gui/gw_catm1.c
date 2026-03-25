@@ -18,6 +18,7 @@ extern uint32_t GW_Storage_GetTotalRecordCount(void);
 extern void UI_Hook_OnTimeChanged(void);
 extern void UI_Hook_OnBootTimeSyncBeaconRequested(void);
 extern void UI_Hook_OnCatm1PowerFaultStopRequested(void);
+static bool prv_parse_cereg_stat(const char* rsp, uint8_t* stat);
 
 static volatile bool s_catm1_busy = false;
 static volatile bool s_catm1_session_at_ok = false;
@@ -40,9 +41,12 @@ static uint8_t s_time_sync_delta_count = 0u;
 static bool s_catm1_time_auto_update_attempted_this_power = false;
 static bool s_catm1_startup_apn_configured_this_power = false;
 static bool s_catm1_bandcfg_applied_this_power = false;
-/* Power-on 직후 *PSUTTZ URC로 시간을 이미 받았는지 추적한다.
- * 다만 boot-time sync 성공 처리는 실제 +CCLK?를 받아 최종 시간을 반영한 뒤에만 완료한다. */
+/* Power-on 직후 *PSUTTZ/+PSUTTZ URC로 시간을 이미 받았는지 추적한다.
+ * boot-time strict-order 구간에서는 URC로 받은 epoch를 보관해 두었다가
+ * 사용자 요구 순서를 끝낸 뒤 즉시 반영할 수 있게 한다. */
 static bool s_catm1_time_synced_from_urc_this_power = false;
+static bool s_catm1_pending_psuttz_valid = false;
+static uint64_t s_catm1_pending_psuttz_epoch_centi = 0u;
 static bool s_catm1_tcp_time_sync_pending = false;
 static bool s_catm1_boot_time_sync_strict_order_active = false;
 static volatile bool s_catm1_server_cmd_ind_seen = false;
@@ -273,6 +277,25 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #define GW_CATM1_POWEROFF_CFUN_SETTLE_MS (300u)
 #endif
 
+#ifndef GW_CATM1_USER_BOOT_CEREG_MAX_POLLS
+#define GW_CATM1_USER_BOOT_CEREG_MAX_POLLS (5u)
+#endif
+#ifndef GW_CATM1_USER_BOOT_CEREG_POLL_GAP_MS
+#define GW_CATM1_USER_BOOT_CEREG_POLL_GAP_MS (3000u)
+#endif
+#ifndef GW_CATM1_USER_TCP_CEREG_MAX_POLLS
+#define GW_CATM1_USER_TCP_CEREG_MAX_POLLS (5u)
+#endif
+#ifndef GW_CATM1_USER_TCP_CEREG_POLL_GAP_MS
+#define GW_CATM1_USER_TCP_CEREG_POLL_GAP_MS (3000u)
+#endif
+#ifndef GW_CATM1_USER_BOOT_CCLK_MAX_TRY
+#define GW_CATM1_USER_BOOT_CCLK_MAX_TRY (3u)
+#endif
+#ifndef GW_CATM1_USER_BOOT_CCLK_GAP_MS
+#define GW_CATM1_USER_BOOT_CCLK_GAP_MS (1000u)
+#endif
+
 #ifndef GW_TCP_INTERNAL_TEMP_COMP_C
 #define GW_TCP_INTERNAL_TEMP_COMP_C ((int8_t)-4)
 #endif
@@ -493,10 +516,13 @@ static void prv_capture_attach_debug_snapshot(bool include_cpsi);
 static bool prv_recover_boot_time_sync_registration(void);
 static void prv_prepare_low_current_before_poweroff(void);
 static bool prv_have_time_from_boot_urc_this_power(void);
+static bool prv_apply_pending_psuttz_time(bool notify_hook);
 static bool prv_force_cclk_time_sync(uint32_t max_try, uint32_t gap_ms, bool notify_hook);
 static bool prv_force_cclk_time_sync_after_ctzu(bool notify_hook);
 static bool prv_finish_time_sync_from_boot_urc(bool notify_hook);
-static bool prv_sync_time_startup_ntp_then_network(void);
+static bool prv_wait_cereg_registered_fixed(uint32_t max_polls, uint32_t gap_ms);
+static bool prv_startup_time_sync_user_sequence(void);
+static bool prv_prepare_tcp_send_user_sequence(void);
 
 static void prv_catm1_rb_reset(void)
 {
@@ -550,6 +576,9 @@ static bool prv_parse_psuttz_epoch(const char* line, uint64_t* out_epoch_centi)
     }
 
     p = strstr(line, "*PSUTTZ:");
+    if (p == NULL) {
+        p = strstr(line, "+PSUTTZ:");
+    }
     if (p == NULL) {
         return false;
     }
@@ -646,6 +675,17 @@ static bool prv_have_time_from_boot_urc_this_power(void)
     return (s_catm1_time_synced_from_urc_this_power && UI_Time_IsValid());
 }
 
+static bool prv_apply_pending_psuttz_time(bool notify_hook)
+{
+    if (!s_catm1_pending_psuttz_valid) {
+        return false;
+    }
+
+    prv_apply_time_epoch(s_catm1_pending_psuttz_epoch_centi, notify_hook);
+    s_catm1_pending_psuttz_valid = false;
+    return true;
+}
+
 static bool prv_force_cclk_time_sync(uint32_t max_try, uint32_t gap_ms, bool notify_hook)
 {
     uint64_t epoch_centi = 0u;
@@ -713,7 +753,8 @@ static bool prv_try_consume_async_urc_line(const char* line, size_t line_len)
         return true;
     }
 
-    if (strncmp(begin, "*PSUTTZ:", 8) != 0) {
+    if ((strncmp(begin, "*PSUTTZ:", 8) != 0) &&
+        (strncmp(begin, "+PSUTTZ:", 8) != 0)) {
         return false;
     }
 
@@ -725,12 +766,10 @@ static bool prv_try_consume_async_urc_line(const char* line, size_t line_len)
     tmp[copy_len] = '\0';
 
     if (prv_parse_psuttz_epoch(tmp, &epoch_centi)) {
-        /* Boot-time strict ordering에서는
-         * CFUN=1 -> CGDCONT(APN) -> CNMP=38 -> CMNB=1 -> COPS=0
-         * -> CEREG 등록 확인 -> CNACT -> CTZU -> CCLK 순서를 유지해야 하므로,
-         * power-on time-sync 세션 동안에는 *PSUTTZ를 즉시 RTC에 반영하지 않고
-         * "시간 URC를 본 적이 있다"는 사실만 기록한다. */
-        if (!s_catm1_boot_time_sync_strict_order_active) {
+        if (s_catm1_boot_time_sync_strict_order_active) {
+            s_catm1_pending_psuttz_epoch_centi = epoch_centi;
+            s_catm1_pending_psuttz_valid = true;
+        } else {
             prv_apply_time_epoch(epoch_centi, true);
         }
         s_catm1_time_synced_from_urc_this_power = true;
@@ -1845,21 +1884,148 @@ static bool prv_ntp_sync_time(uint64_t* out_epoch_centi)
     return prv_query_network_time_epoch_retry(6u, 1000u, false, NULL, out_epoch_centi);
 }
 
-static bool prv_sync_time_startup_ntp_then_network(void)
+static bool prv_startup_time_sync_user_sequence(void)
 {
     uint64_t epoch_centi = 0u;
+    char rsp[UI_CATM1_RX_BUF_SZ];
+    uint32_t poll_idx;
+    uint8_t stat = 0u;
+    bool registered = false;
 
-    if (!prv_prepare_apn_before_time_sync()) {
+    s_catm1_pending_psuttz_valid = false;
+
+    /* 부팅 직후 시간 확보는 사용자 지정 순서를 그대로 따른다.
+     * 1) AT / ATE0      (prv_start_session(false)에서 처리)
+     * 2) AT+CTZU=1
+     * 3) AT+CGDCONT=1,"IP","APN"
+     * 4) AT+CFUN=1
+     * 5) AT+CEREG?      (3초 간격 5회, 0,1 또는 0,5 대기)
+     * 6) AT+CNACT=0,1
+     * 7) *PSUTTZ/+PSUTTZ가 오면 즉시 시간 정리 후 종료
+     * 8) 없으면 AT+CCLK?로 최종 확인 */
+    if (!prv_apply_time_auto_update_cfg()) {
+        return false;
+    }
+    s_catm1_time_auto_update_attempted_this_power = true;
+    if (prv_apply_pending_psuttz_time(true)) {
+        return true;
+    }
+
+    prv_wait_rx_quiet(100u, 300u);
+    if (!prv_apply_bootstrap_apn_profile(false)) {
+        if (prv_apply_pending_psuttz_time(true)) {
+            return true;
+        }
+        return false;
+    }
+    if (prv_apply_pending_psuttz_time(true)) {
+        return true;
+    }
+
+    prv_wait_rx_quiet(100u, 300u);
+    rsp[0] = '\0';
+    if (!prv_send_cmd_wait("AT+CFUN=1\r\n", "OK", NULL, NULL,
+                           GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        if (prv_apply_pending_psuttz_time(true)) {
+            return true;
+        }
+        return false;
+    }
+    prv_wait_rx_quiet(100u, GW_CATM1_APN_BOOTSTRAP_CFUN_ON_SETTLE_MS);
+    if (prv_apply_pending_psuttz_time(true)) {
+        return true;
+    }
+
+    for (poll_idx = 0u; poll_idx < GW_CATM1_USER_BOOT_CEREG_MAX_POLLS; poll_idx++) {
+        rsp[0] = '\0';
+        if (prv_send_query_wait_prefix_ok("AT+CEREG?\r\n", "+CEREG:",
+                                          UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
+            prv_parse_cereg_stat(rsp, &stat) &&
+            ((stat == 1u) || (stat == 5u))) {
+            registered = true;
+            break;
+        }
+
+        if (prv_apply_pending_psuttz_time(true)) {
+            return true;
+        }
+
+        if ((poll_idx + 1u) < GW_CATM1_USER_BOOT_CEREG_MAX_POLLS) {
+            prv_wait_rx_quiet(100u, 300u);
+            prv_delay_ms(GW_CATM1_USER_BOOT_CEREG_POLL_GAP_MS);
+        }
+    }
+
+    if (!registered) {
+        if (prv_apply_pending_psuttz_time(true)) {
+            return true;
+        }
         return false;
     }
 
-    /* Boot-time one-shot sync 순서는 사용자가 준 초기화 절차에 맞춘다.
-     * SMS Ready/CPIN READY 이후:
-     *   CFUN=1 -> CGDCONT -> CNMP=38 -> CMNB=1 -> COPS=0 -> CSQ
-     *   -> CEREG? (0,1/0,5 대기, 0,2 지속 시 CPSI?/CFUN recovery)
-     *   -> CNACT=0,1 -> CTZU=1 -> CCLK?
-     * 시간 판정은 이 경로의 +CCLK?가 성공했을 때만 완료한다. */
-    if (!prv_wait_boot_time_sync_registered(GW_CATM1_STARTUP_REG_WAIT_MS)) {
+    if (!prv_activate_boot_time_pdp()) {
+        if (prv_apply_pending_psuttz_time(true)) {
+            return true;
+        }
+        return false;
+    }
+
+    if (prv_apply_pending_psuttz_time(true)) {
+        return true;
+    }
+
+    if (!prv_query_network_time_epoch_retry(GW_CATM1_USER_BOOT_CCLK_MAX_TRY,
+                                            GW_CATM1_USER_BOOT_CCLK_GAP_MS,
+                                            false,
+                                            NULL,
+                                            &epoch_centi)) {
+        if (prv_apply_pending_psuttz_time(true)) {
+            return true;
+        }
+        return false;
+    }
+
+    prv_apply_time_epoch(epoch_centi, true);
+    return true;
+}
+
+static bool prv_wait_cereg_registered_fixed(uint32_t max_polls, uint32_t gap_ms)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+    uint8_t stat = 0u;
+    uint32_t poll_idx;
+
+    if (max_polls == 0u) {
+        return false;
+    }
+
+    for (poll_idx = 0u; poll_idx < max_polls; poll_idx++) {
+        rsp[0] = '\0';
+        if (prv_send_query_wait_prefix_ok("AT+CEREG?\r\n", "+CEREG:",
+                                          UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
+            prv_parse_cereg_stat(rsp, &stat) &&
+            ((stat == 1u) || (stat == 5u))) {
+            return true;
+        }
+
+        if ((poll_idx + 1u) < max_polls) {
+            prv_wait_rx_quiet(100u, 300u);
+            prv_delay_ms(gap_ms);
+        }
+    }
+
+    return false;
+}
+
+static bool prv_prepare_tcp_send_user_sequence(void)
+{
+    prv_wait_rx_quiet(100u, 300u);
+    if (!prv_apply_bootstrap_apn_profile(false)) {
+        return false;
+    }
+
+    if (!prv_wait_cereg_registered_fixed(GW_CATM1_USER_TCP_CEREG_MAX_POLLS,
+                                         GW_CATM1_USER_TCP_CEREG_POLL_GAP_MS)) {
         return false;
     }
 
@@ -1867,23 +2033,6 @@ static bool prv_sync_time_startup_ntp_then_network(void)
         return false;
     }
 
-    if (!prv_apply_time_auto_update_cfg()) {
-        return false;
-    }
-    s_catm1_time_auto_update_attempted_this_power = true;
-
-    prv_wait_rx_quiet(100u, 400u);
-    prv_delay_ms(GW_CATM1_BOOT_FORCE_CCLK_SETTLE_MS);
-
-    if (!prv_query_network_time_epoch_retry(GW_CATM1_STARTUP_CCLK_RETRY,
-                                            GW_CATM1_STARTUP_CCLK_GAP_MS,
-                                            false,
-                                            NULL,
-                                            &epoch_centi)) {
-        return false;
-    }
-
-    prv_apply_time_epoch(epoch_centi, true);
     return true;
 }
 
@@ -2461,6 +2610,8 @@ static void prv_finish_power_off_state(void)
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_time_synced_from_urc_this_power = false;
+    s_catm1_pending_psuttz_valid = false;
+    s_catm1_pending_psuttz_epoch_centi = 0u;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
@@ -2936,8 +3087,7 @@ static bool prv_send_tcp_payload(const char* payload)
         return false;
     }
 
-    prv_sync_time_before_tcp_send();
-
+    /* TCP 전송 경로는 APN -> CEREG -> CNACT -> CAOPEN 이후 곧바로 payload를 보낸다. */
     (void)snprintf(cmd, sizeof(cmd), "AT+CASEND=0,%u,%u\r\n", (unsigned)len, (unsigned)UI_CATM1_SEND_INPUT_TIMEOUT_MS);
     if (!prv_send_cmd_wait(cmd, ">", NULL, NULL, UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
         return false;
@@ -3448,6 +3598,8 @@ bool GW_Catm1_SyncTimeOnce(void)
     /* MCU가 다시 부팅된 경우라도 boot one-shot sync에서는
      * 첫 세팅을 무조건 APN bootstrap으로 다시 보장한다. */
     s_catm1_startup_apn_configured_this_power = false;
+    s_catm1_pending_psuttz_valid = false;
+    s_catm1_pending_psuttz_epoch_centi = 0u;
 
     UI_LPM_LockStop();
     GW_Catm1_SetBusy(true);
@@ -3470,7 +3622,7 @@ bool GW_Catm1_SyncTimeOnce(void)
             continue;
         }
 
-        success = prv_sync_time_startup_ntp_then_network();
+        success = prv_startup_time_sync_user_sequence();
         prv_finish_sms_ready_loop_attempt(success);
         if (success || (s_catm1_sms_ready_loop_attempt_count >= GW_CATM1_SMS_READY_LOOP_STOP_TRY)) {
             break;
@@ -3486,10 +3638,6 @@ cleanup:
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
     s_catm1_boot_time_sync_strict_order_active = false;
-
-    if (success) {
-        UI_Hook_OnBootTimeSyncBeaconRequested();
-    }
 
     return success;
 }
@@ -3667,13 +3815,7 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
         prv_finish_sms_ready_loop_attempt(false);
         goto cleanup;
     }
-    if (!prv_wait_eps_registered()) {
-        goto cleanup;
-    }
-    if (!prv_wait_ps_attached()) {
-        goto cleanup;
-    }
-    if (!prv_activate_pdp()) {
+    if (!prv_prepare_tcp_send_user_sequence()) {
         goto cleanup;
     }
     pdp_active = true;
@@ -3737,13 +3879,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         prv_finish_sms_ready_loop_attempt(false);
         goto cleanup;
     }
-    if (!prv_wait_eps_registered()) {
-        goto cleanup;
-    }
-    if (!prv_wait_ps_attached()) {
-        goto cleanup;
-    }
-    if (!prv_activate_pdp()) {
+    if (!prv_prepare_tcp_send_user_sequence()) {
         goto cleanup;
     }
     pdp_active = true;

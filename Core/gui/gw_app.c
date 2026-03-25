@@ -1812,17 +1812,15 @@ void GW_App_Process(void)
     }
 
     if (s_boot_time_sync_pending && (s_state == GW_STATE_IDLE) && !GW_Catm1_IsBusy()) {
+        s_boot_time_sync_pending = false;
         if (!GW_Catm1_SyncTimeOnce()) {
-            prv_schedule_after_ms(GW_BOOT_TIME_SYNC_RETRY_DELAY_MS);
+            prv_enter_dormant_stop_mode();
             return;
         }
 
-        s_boot_time_sync_pending = false;
         prv_hour_rec_init(prv_get_current_cycle_timestamp_sec());
-        if (ev == 0u) {
-            prv_schedule_wakeup();
-            return;
-        }
+        prv_enter_dormant_stop_mode();
+        return;
     }
 
     if (prv_handle_boot_time_sync_beacon()) {
