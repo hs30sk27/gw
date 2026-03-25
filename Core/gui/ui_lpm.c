@@ -351,7 +351,7 @@ void UI_LPM_BeforeStop_DeInitPeripherals(void)
     GW_Storage_W25Q_PowerDown();
 
     /* 외부 부하가 남지 않도록 제어 핀을 저전력 상태로 고정 */
-//    prv_force_stop_pin_levels();
+    prv_force_stop_pin_levels();
 
     /* SW 상태 정리: 다음 wake-up 이후 재진입 시 꼬임 방지 */
     UI_Core_ClearFlagsBeforeStop();

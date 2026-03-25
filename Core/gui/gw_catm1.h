@@ -32,6 +32,9 @@ void GW_Catm1_PowerOff(void);
 void GW_Catm1_UartRxCpltCallback(UART_HandleTypeDef *huart);
 void GW_Catm1_UartErrorCallback(UART_HandleTypeDef *huart);
 
+/* power-fault(SMS Ready loop) stop request latch */
+bool GW_Catm1_ConsumePowerFaultStopRequest(void);
+
 /* 서버 전송 등 고전류 동작 여부(비콘/BLE 충돌 회피에 사용) */
 bool GW_Catm1_IsBusy(void);
 void GW_Catm1_SetBusy(bool busy);

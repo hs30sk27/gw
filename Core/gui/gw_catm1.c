@@ -219,7 +219,7 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #define GW_CATM1_CEREG_POLL_GAP_MS (5000u)
 #endif
 #ifndef GW_CATM1_BOOT_CEREG_TIMEOUT_MS
-#define GW_CATM1_BOOT_CEREG_TIMEOUT_MS (180000u)
+#define GW_CATM1_BOOT_CEREG_TIMEOUT_MS (20000u)
 #endif
 #ifndef GW_CATM1_BOOT_CEREG_POLL_GAP_MS
 #define GW_CATM1_BOOT_CEREG_POLL_GAP_MS (2500u)

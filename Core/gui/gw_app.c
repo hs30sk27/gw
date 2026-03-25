@@ -1723,6 +1723,10 @@ void GW_App_Process(void)
         return;
     }
 
+    if (GW_Catm1_ConsumePowerFaultStopRequest()) {
+        prv_enter_dormant_stop_mode();
+    }
+
     if (s_dormant_stop_mode) {
         prv_evt_clear_all();
         UI_LPM_EnterStopNow();
