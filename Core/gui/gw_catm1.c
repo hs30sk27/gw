@@ -50,6 +50,7 @@ static uint64_t s_catm1_pending_psuttz_epoch_centi = 0u;
 static bool s_catm1_tcp_time_sync_pending = false;
 static bool s_catm1_boot_time_sync_strict_order_active = false;
 static volatile bool s_catm1_server_cmd_ind_seen = false;
+static volatile bool s_catm1_power_fault_stop_request = false;
 
 static bool s_failed_snapshot_queued_valid = false;
 static uint32_t s_failed_snapshot_queued_epoch_sec = 0u;
@@ -339,6 +340,7 @@ static void prv_finish_sms_ready_loop_attempt(bool success)
     }
 
     if (s_catm1_sms_ready_loop_attempt_count == GW_CATM1_SMS_READY_LOOP_STOP_TRY) {
+        s_catm1_power_fault_stop_request = true;
         UI_Hook_OnCatm1PowerFaultStopRequested();
     }
 }
@@ -3396,6 +3398,7 @@ void GW_Catm1_UartErrorCallback(UART_HandleTypeDef *huart)
 void GW_Catm1_Init(void)
 {
     prv_catm1_rb_reset();
+    s_catm1_power_fault_stop_request = false;
     s_catm1_session_at_ok = false;
     s_catm1_boot_sms_ready_seen = false;
     s_catm1_waiting_boot_sms_ready = false;
@@ -3546,6 +3549,14 @@ bool GW_Catm1_IsBusy(void)
 void GW_Catm1_SetBusy(bool busy)
 {
     s_catm1_busy = busy;
+}
+
+bool GW_Catm1_ConsumePowerFaultStopRequest(void)
+{
+    bool pending = s_catm1_power_fault_stop_request;
+
+    s_catm1_power_fault_stop_request = false;
+    return pending;
 }
 
 void GW_Catm1_ClearTimeSyncDeltaBuf(void)

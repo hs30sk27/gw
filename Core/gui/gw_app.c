@@ -42,6 +42,13 @@ static UTIL_TIMER_Object_t s_tmr_led1_pulse;
 static UTIL_TIMER_Object_t s_tmr_ble_test_expire;
 static volatile uint32_t s_evt_flags = 0;
 
+/* gw_catm1.c가 아직 교체되지 않은 빌드에서도 링크가 깨지지 않도록 fallback 제공.
+ * 최신 gw_catm1.c가 함께 빌드되면 strong definition이 우선된다. */
+__attribute__((weak)) bool GW_Catm1_ConsumePowerFaultStopRequest(void)
+{
+    return false;
+}
+
 #define GW_EVT_WAKEUP           (1u << 0)
 #define GW_EVT_BEACON_ONESHOT   (1u << 1)
 #define GW_EVT_RADIO_TX_DONE    (1u << 2)
