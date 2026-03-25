@@ -251,6 +251,9 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_TCP_INTERNAL_TEMP_COMP_C
 #define GW_TCP_INTERNAL_TEMP_COMP_C ((int8_t)-4)
 #endif
+#ifndef GW_CATM1_TIME_RESYNC_BEACON_DELTA_CENTI
+#define GW_CATM1_TIME_RESYNC_BEACON_DELTA_CENTI (50u)
+#endif
 
 static bool prv_tcp_blocked_by_ble(void)
 {
@@ -525,14 +528,25 @@ static bool prv_parse_psuttz_epoch(const char* line, uint64_t* out_epoch_centi)
     return true;
 }
 
+static uint64_t prv_uabs_i64(int64_t v)
+{
+    return (v < 0) ? (uint64_t)(-v) : (uint64_t)v;
+}
+
 static void prv_apply_time_epoch(uint64_t epoch_centi, bool notify_hook)
 {
-    int64_t delta_sec = (int64_t)(epoch_centi / 100u) - (int64_t)UI_Time_NowSec2016();
+    uint64_t now_centi = UI_Time_NowCenti2016();
+    int64_t delta_centi = (int64_t)epoch_centi - (int64_t)now_centi;
+    int64_t delta_sec = (int64_t)(epoch_centi / 100u) - (int64_t)(now_centi / 100u);
 
     prv_time_sync_delta_push(delta_sec);
     UI_Time_SetEpochCenti2016(epoch_centi);
     if (notify_hook) {
         UI_Hook_OnTimeChanged();
+        if (!s_catm1_boot_time_sync_strict_order_active &&
+            (prv_uabs_i64(delta_centi) >= GW_CATM1_TIME_RESYNC_BEACON_DELTA_CENTI)) {
+            UI_Hook_OnBootTimeSyncBeaconRequested();
+        }
     }
 }
 
@@ -3191,7 +3205,7 @@ uint8_t GW_Catm1_CopyTimeSyncDeltaBuf(int64_t* out_buf, uint8_t max_items)
 bool GW_Catm1_SyncTimeOnce(void)
 {
     bool success = false;
-    bool retried = false;
+    uint32_t attempt = 0u;
 
     if (GW_Catm1_IsBusy()) {
         return false;
@@ -3208,24 +3222,19 @@ bool GW_Catm1_SyncTimeOnce(void)
         goto cleanup;
     }
 
-retry_after_power_cycle:
-    if (!prv_start_session(false)) {
-        if (!retried) {
-            retried = true;
-            if (!prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
-                prv_force_power_cut();
-            }
-            goto retry_after_power_cycle;
+    for (attempt = 0u; attempt < GW_CATM1_STARTUP_SYNC_ATTEMPTS; attempt++) {
+        if ((attempt > 0u) && !prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
+            prv_force_power_cut();
         }
-        goto cleanup;
-    }
 
-    success = prv_sync_time_startup_ntp_then_network();
+        if (!prv_start_session(false)) {
+            continue;
+        }
 
-    if (!success && !retried) {
-        retried = true;
-        prv_force_power_cut();
-        goto retry_after_power_cycle;
+        success = prv_sync_time_startup_ntp_then_network();
+        if (success) {
+            break;
+        }
     }
 
 cleanup:

@@ -175,6 +175,9 @@ static bool s_boot_time_sync_beacon_pending = false;
 #ifndef GW_CATM1_PENDING_POLL_MS
 #define GW_CATM1_PENDING_POLL_MS       (1000u)
 #endif
+#ifndef GW_BOOT_TIME_SYNC_RETRY_DELAY_MS
+#define GW_BOOT_TIME_SYNC_RETRY_DELAY_MS (5000u)
+#endif
 
 static uint8_t s_beacon_tx_payload[UI_BEACON_PAYLOAD_LEN];
 static uint8_t s_rx_shadow[UI_NODE_PAYLOAD_LEN];
@@ -1768,8 +1771,12 @@ void GW_App_Process(void)
     }
 
     if (s_boot_time_sync_pending && (s_state == GW_STATE_IDLE) && !GW_Catm1_IsBusy()) {
+        if (!GW_Catm1_SyncTimeOnce()) {
+            prv_schedule_after_ms(GW_BOOT_TIME_SYNC_RETRY_DELAY_MS);
+            return;
+        }
+
         s_boot_time_sync_pending = false;
-        (void)GW_Catm1_SyncTimeOnce();
         prv_hour_rec_init(prv_get_current_cycle_timestamp_sec());
         if (ev == 0u) {
             prv_schedule_wakeup();
@@ -2156,6 +2163,9 @@ static void prv_schedule_wakeup(void)
         return;
     }
     if (s_dormant_stop_mode) {
+        return;
+    }
+    if (s_boot_time_sync_pending) {
         return;
     }
 
