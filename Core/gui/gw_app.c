@@ -231,6 +231,7 @@ static bool prv_backlog_batch_included_live_record(uint32_t first_index, uint32_
 static uint32_t prv_flash_tx_pending_count(void);
 static void prv_flash_tx_note_sent(uint32_t sent_count);
 static void prv_exit_dormant_stop_mode(void);
+static void prv_enter_dormant_stop_mode(void);
 static void prv_led1_sync_blink_stop(void);
 static void prv_request_schedule_recheck_now(void);
 static bool prv_handle_boot_time_sync_beacon(void);
@@ -300,6 +301,38 @@ static void prv_exit_dormant_stop_mode(void)
 
     s_dormant_stop_mode = false;
     prv_evt_clear_all();
+}
+
+static void prv_enter_dormant_stop_mode(void)
+{
+    if (!s_inited) {
+        return;
+    }
+
+    prv_cancel_pending_beacon_burst();
+    (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
+    (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
+    (void)UTIL_TIMER_Stop(&s_tmr_ble_test_expire);
+    prv_led1_sync_blink_stop();
+
+    s_ble_test_session_active = false;
+    s_beacon_oneshot_pending = false;
+    s_boot_time_sync_pending = false;
+    s_boot_time_sync_beacon_pending = false;
+    s_catm1_uplink_pending = false;
+    s_catm1_immediate_try_pending = false;
+    s_catm1_retry_not_before_ms = 0u;
+    s_last_catm1_slot_id = 0xFFFFFFFFu;
+    s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
+    s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
+    s_last_2m_prep_slot_id = 0xFFFFFFFFu;
+    s_last_periodic_beacon_slot_id = 0xFFFFFFFFu;
+    s_active_periodic_beacon_slot_id = 0xFFFFFFFFu;
+    s_sync_wait_deadline_ms = 0u;
+    s_dormant_stop_mode = true;
+
+    prv_evt_clear_all();
+    UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
 }
 
 void GW_App_PrepareForDormantStop(void)
@@ -1382,6 +1415,9 @@ static bool prv_rearm_current_rx_slot(void)
 
 static void prv_schedule_after_ms(uint32_t delay_ms)
 {
+    if (s_dormant_stop_mode) {
+        return;
+    }
     if (delay_ms == 0u) {
         delay_ms = 1u;
     }
@@ -1689,6 +1725,7 @@ void GW_App_Process(void)
 
     if (s_dormant_stop_mode) {
         prv_evt_clear_all();
+        UI_LPM_EnterStopNow();
         return;
     }
 
@@ -2381,6 +2418,15 @@ void UI_Hook_OnBootTimeSyncBeaconRequested(void)
 
     s_boot_time_sync_beacon_pending = true;
     prv_request_schedule_recheck_now();
+}
+
+void UI_Hook_OnCatm1PowerFaultStopRequested(void)
+{
+    if (!s_inited) {
+        return;
+    }
+
+    prv_enter_dormant_stop_mode();
 }
 
 void UI_Hook_OnTestStartRequested(void)

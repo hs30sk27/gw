@@ -17,6 +17,7 @@ extern bool GW_Storage_SaveHourRec(const GW_HourRec_t* rec);
 extern uint32_t GW_Storage_GetTotalRecordCount(void);
 extern void UI_Hook_OnTimeChanged(void);
 extern void UI_Hook_OnBootTimeSyncBeaconRequested(void);
+extern void UI_Hook_OnCatm1PowerFaultStopRequested(void);
 
 static volatile bool s_catm1_busy = false;
 static volatile bool s_catm1_session_at_ok = false;
@@ -30,6 +31,9 @@ static volatile uint32_t s_catm1_last_caopen_ms = 0u;
 static volatile bool s_catm1_waiting_boot_sms_ready = false;
 static volatile bool s_catm1_boot_sms_ready_seen = false;
 static volatile bool s_catm1_tcp_open_fail_powerdown_pending = false;
+static volatile bool s_catm1_expect_sms_ready_token = false;
+static bool s_catm1_session_sms_ready_loop_seen = false;
+static uint8_t s_catm1_sms_ready_loop_attempt_count = 0u;
 static int64_t s_time_sync_delta_sec_buf[GW_CATM1_TIME_SYNC_DELTA_BUF_LEN];
 static uint8_t s_time_sync_delta_wr = 0u;
 static uint8_t s_time_sync_delta_count = 0u;
@@ -214,6 +218,27 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_CEREG_POLL_GAP_MS
 #define GW_CATM1_CEREG_POLL_GAP_MS (5000u)
 #endif
+#ifndef GW_CATM1_BOOT_CEREG_TIMEOUT_MS
+#define GW_CATM1_BOOT_CEREG_TIMEOUT_MS (180000u)
+#endif
+#ifndef GW_CATM1_BOOT_CEREG_POLL_GAP_MS
+#define GW_CATM1_BOOT_CEREG_POLL_GAP_MS (2500u)
+#endif
+#ifndef GW_CATM1_BOOT_CEREG_DIAG_STRIDE
+#define GW_CATM1_BOOT_CEREG_DIAG_STRIDE (3u)
+#endif
+#ifndef GW_CATM1_BOOT_CSQ_TIMEOUT_MS
+#define GW_CATM1_BOOT_CSQ_TIMEOUT_MS (1500u)
+#endif
+#ifndef GW_CATM1_BOOT_CPSI_TIMEOUT_MS
+#define GW_CATM1_BOOT_CPSI_TIMEOUT_MS (2000u)
+#endif
+#ifndef GW_CATM1_BOOT_CEREG_RECOVERY_MAX
+#define GW_CATM1_BOOT_CEREG_RECOVERY_MAX (1u)
+#endif
+#ifndef GW_CATM1_BOOT_CEREG_RECOVERY_SETTLE_MS
+#define GW_CATM1_BOOT_CEREG_RECOVERY_SETTLE_MS (1500u)
+#endif
 #ifndef GW_CATM1_CGATT_ATTACH_TIMEOUT_MS
 #define GW_CATM1_CGATT_ATTACH_TIMEOUT_MS (75000u)
 #endif
@@ -254,6 +279,69 @@ static uint8_t s_failed_snapshot_queued_gw_num = 0u;
 #ifndef GW_CATM1_TIME_RESYNC_BEACON_DELTA_CENTI
 #define GW_CATM1_TIME_RESYNC_BEACON_DELTA_CENTI (50u)
 #endif
+
+#ifndef GW_CATM1_SMS_READY_LOOP_STOP_TRY
+#define GW_CATM1_SMS_READY_LOOP_STOP_TRY (3u)
+#endif
+
+static bool prv_is_trim_char(char ch);
+
+static void prv_begin_sms_ready_loop_attempt(void)
+{
+    s_catm1_session_sms_ready_loop_seen = false;
+}
+
+static void prv_mark_sms_ready_loop_seen(void)
+{
+    if (s_catm1_busy) {
+        s_catm1_session_sms_ready_loop_seen = true;
+    }
+}
+
+static void prv_finish_sms_ready_loop_attempt(bool success)
+{
+    if (success) {
+        s_catm1_session_sms_ready_loop_seen = false;
+        s_catm1_sms_ready_loop_attempt_count = 0u;
+        return;
+    }
+
+    if (!s_catm1_session_sms_ready_loop_seen) {
+        return;
+    }
+
+    s_catm1_session_sms_ready_loop_seen = false;
+    if (s_catm1_sms_ready_loop_attempt_count < 0xFFu) {
+        s_catm1_sms_ready_loop_attempt_count++;
+    }
+
+    if (s_catm1_sms_ready_loop_attempt_count == GW_CATM1_SMS_READY_LOOP_STOP_TRY) {
+        UI_Hook_OnCatm1PowerFaultStopRequested();
+    }
+}
+
+static bool prv_is_trimmed_line_equal(const char* begin, const char* end, const char* token)
+{
+    size_t tok_len;
+
+    if ((begin == NULL) || (end == NULL) || (token == NULL) || (end < begin)) {
+        return false;
+    }
+
+    while ((begin < end) && prv_is_trim_char(*begin)) {
+        begin++;
+    }
+    while ((end > begin) && prv_is_trim_char(end[-1])) {
+        end--;
+    }
+
+    tok_len = strlen(token);
+    if ((size_t)(end - begin) != tok_len) {
+        return false;
+    }
+
+    return (strncmp(begin, token, tok_len) == 0);
+}
 
 static bool prv_tcp_blocked_by_ble(void)
 {
@@ -400,6 +488,9 @@ static bool prv_query_network_time_epoch_retry(uint32_t max_try, uint32_t gap_ms
 static bool prv_apply_time_auto_update_cfg(void);
 static bool prv_request_auto_operator_select(bool force_send);
 static bool prv_is_eps_registered_stat(uint8_t stat);
+static bool prv_query_signal_quality(uint8_t* out_rssi, uint8_t* out_ber);
+static void prv_capture_attach_debug_snapshot(bool include_cpsi);
+static bool prv_recover_boot_time_sync_registration(void);
 static void prv_prepare_low_current_before_poweroff(void);
 static bool prv_have_time_from_boot_urc_this_power(void);
 static bool prv_force_cclk_time_sync(uint32_t max_try, uint32_t gap_ms, bool notify_hook);
@@ -611,6 +702,15 @@ static bool prv_try_consume_async_urc_line(const char* line, size_t line_len)
     }
     if (end <= begin) {
         return false;
+    }
+
+    if (prv_is_trimmed_line_equal(begin, end, "SMS Ready")) {
+        if (s_catm1_expect_sms_ready_token) {
+            return false;
+        }
+
+        prv_mark_sms_ready_loop_seen();
+        return true;
     }
 
     if (strncmp(begin, "*PSUTTZ:", 8) != 0) {
@@ -1112,7 +1212,9 @@ static bool prv_wait_boot_sms_ready(void)
     bool ready = false;
 
     rsp[0] = '\0';
+    s_catm1_expect_sms_ready_token = true;
     ready = prv_uart_wait_for(rsp, sizeof(rsp), GW_CATM1_BOOT_URC_WAIT_MS, "SMS Ready", NULL, NULL);
+    s_catm1_expect_sms_ready_token = false;
     if (ready) {
         s_catm1_boot_sms_ready_seen = true;
         s_catm1_waiting_boot_sms_ready = false;
@@ -1191,6 +1293,7 @@ static bool prv_start_session(bool enable_time_auto_update)
         return false;
     }
     if (!prv_wait_at_sync_after_sms_ready()) {
+        prv_mark_sms_ready_loop_seen();
         return false;
     }
 
@@ -1267,13 +1370,17 @@ static void prv_try_apply_korea_catm_bands(void)
 static bool prv_wait_sms_ready_after_cfun1(uint32_t timeout_ms)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
+    bool ready;
 
     if (timeout_ms == 0u) {
         return false;
     }
 
     rsp[0] = '\0';
-    return prv_uart_wait_for(rsp, sizeof(rsp), timeout_ms, "SMS Ready", NULL, NULL);
+    s_catm1_expect_sms_ready_token = true;
+    ready = prv_uart_wait_for(rsp, sizeof(rsp), timeout_ms, "SMS Ready", NULL, NULL);
+    s_catm1_expect_sms_ready_token = false;
+    return ready;
 }
 
 static bool prv_apply_bootstrap_apn_profile(bool verify_after_set)
@@ -1302,6 +1409,95 @@ static bool prv_apply_bootstrap_apn_profile(bool verify_after_set)
 }
 
 
+
+static bool prv_query_signal_quality(uint8_t* out_rssi, uint8_t* out_ber)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+    const char* p;
+    unsigned rssi = 99u;
+    unsigned ber = 99u;
+
+    rsp[0] = '\0';
+    if (!prv_send_query_wait_prefix_ok("AT+CSQ\r\n", "+CSQ:",
+                                       GW_CATM1_BOOT_CSQ_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+
+    p = strstr(rsp, "+CSQ:");
+    if (p == NULL) {
+        return false;
+    }
+    while (strstr(p + 1, "+CSQ:") != NULL) {
+        p = strstr(p + 1, "+CSQ:");
+    }
+
+    if ((sscanf(p, "+CSQ: %u,%u", &rssi, &ber) != 2) &&
+        (sscanf(p, "+CSQ:%u,%u", &rssi, &ber) != 2)) {
+        return false;
+    }
+
+    if (out_rssi != NULL) {
+        *out_rssi = (uint8_t)rssi;
+    }
+    if (out_ber != NULL) {
+        *out_ber = (uint8_t)ber;
+    }
+    return true;
+}
+
+static void prv_capture_attach_debug_snapshot(bool include_cpsi)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+    uint8_t rssi = 99u;
+    uint8_t ber = 99u;
+    bool csq_ok;
+
+    csq_ok = prv_query_signal_quality(&rssi, &ber);
+
+    if (include_cpsi || (csq_ok && (rssi == 99u) && (ber == 99u))) {
+        rsp[0] = '\0';
+        (void)prv_send_query_wait_prefix_ok("AT+CPSI?\r\n", "+CPSI:",
+                                            GW_CATM1_BOOT_CPSI_TIMEOUT_MS, rsp, sizeof(rsp));
+    }
+}
+
+static bool prv_recover_boot_time_sync_registration(void)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+
+    prv_wait_rx_quiet(100u, 400u);
+
+    rsp[0] = '\0';
+    if (!prv_send_cmd_wait("AT+CFUN=0\r\n", "OK", NULL, NULL,
+                           GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+    prv_wait_rx_quiet(100u, GW_CATM1_APN_BOOTSTRAP_CFUN_OFF_SETTLE_MS);
+    prv_delay_ms(GW_CATM1_BOOT_CEREG_RECOVERY_SETTLE_MS);
+
+    rsp[0] = '\0';
+    if (!prv_send_cmd_wait("AT+CFUN=1\r\n", "OK", NULL, NULL,
+                           GW_CATM1_APN_BOOTSTRAP_CFUN_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+    if (!prv_wait_sms_ready_after_cfun1(GW_CATM1_APN_POST_CFUN1_SMS_READY_TIMEOUT_MS)) {
+        return false;
+    }
+    s_catm1_boot_sms_ready_seen = true;
+    s_catm1_waiting_boot_sms_ready = false;
+    if (!prv_wait_at_sync_after_sms_ready()) {
+        prv_mark_sms_ready_loop_seen();
+        return false;
+    }
+    if (!prv_wait_sim_ready()) {
+        return false;
+    }
+
+    s_catm1_startup_apn_configured_this_power = false;
+    prv_wait_rx_quiet(100u, GW_CATM1_APN_BOOTSTRAP_CFUN_ON_SETTLE_MS);
+    return prv_prepare_apn_before_time_sync();
+}
+
 static bool prv_prepare_apn_before_time_sync(void)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
@@ -1318,7 +1514,9 @@ static bool prv_prepare_apn_before_time_sync(void)
      * 2) CGDCONT(APN)
      * 3) CNMP=38
      * 4) CMNB=1
-     * 5) COPS=0 */
+     * 5) COPS=0
+     * 6) CSQ 확인
+     * 7) CEREG? 등록 대기 */
     prv_wait_rx_quiet(100u, 500u);
 
     rsp[0] = '\0';
@@ -1363,6 +1561,8 @@ static bool prv_prepare_apn_before_time_sync(void)
         return false;
     }
     prv_wait_rx_quiet(100u, GW_CATM1_COPS_AUTO_SETTLE_MS);
+    prv_capture_attach_debug_snapshot(false);
+    prv_wait_rx_quiet(100u, 300u);
 
     s_catm1_startup_apn_configured_this_power = true;
     return true;
@@ -1655,8 +1855,9 @@ static bool prv_sync_time_startup_ntp_then_network(void)
 
     /* Boot-time one-shot sync 순서는 사용자가 준 초기화 절차에 맞춘다.
      * SMS Ready/CPIN READY 이후:
-     *   CFUN=1 -> CGDCONT -> CNMP=38 -> CMNB=1 -> COPS=0
-     *   -> CEREG? (0,1/0,5 대기) -> CNACT=0,1 -> CTZU=1 -> CCLK?
+     *   CFUN=1 -> CGDCONT -> CNMP=38 -> CMNB=1 -> COPS=0 -> CSQ
+     *   -> CEREG? (0,1/0,5 대기, 0,2 지속 시 CPSI?/CFUN recovery)
+     *   -> CNACT=0,1 -> CTZU=1 -> CCLK?
      * 시간 판정은 이 경로의 +CCLK?가 성공했을 때만 완료한다. */
     if (!prv_wait_boot_time_sync_registered(GW_CATM1_STARTUP_REG_WAIT_MS)) {
         return false;
@@ -1947,6 +2148,7 @@ static bool prv_request_auto_operator_select(bool force_send)
     }
 
     prv_wait_rx_quiet(100u, GW_CATM1_COPS_AUTO_SETTLE_MS);
+    prv_capture_attach_debug_snapshot(false);
     return true;
 }
 
@@ -1965,23 +2167,47 @@ static bool prv_wait_boot_time_sync_registered(uint32_t timeout_ms)
     char rsp[UI_CATM1_RX_BUF_SZ];
     uint8_t stat = 0u;
     uint32_t start = HAL_GetTick();
+    uint32_t effective_timeout_ms = timeout_ms;
+    uint32_t poll_count = 0u;
+    uint32_t recovery_count = 0u;
 
-    if (timeout_ms == 0u) {
-        timeout_ms = GW_CATM1_STARTUP_REG_WAIT_MS;
+    if ((effective_timeout_ms == 0u) || (effective_timeout_ms < GW_CATM1_BOOT_CEREG_TIMEOUT_MS)) {
+        effective_timeout_ms = GW_CATM1_BOOT_CEREG_TIMEOUT_MS;
     }
 
-    while ((uint32_t)(HAL_GetTick() - start) < timeout_ms) {
+    while (1) {
+        if ((uint32_t)(HAL_GetTick() - start) >= effective_timeout_ms) {
+            if (recovery_count < GW_CATM1_BOOT_CEREG_RECOVERY_MAX) {
+                recovery_count++;
+                if (!prv_recover_boot_time_sync_registration()) {
+                    return false;
+                }
+                start = HAL_GetTick();
+                poll_count = 0u;
+                continue;
+            }
+            break;
+        }
+
+        poll_count++;
         rsp[0] = '\0';
         if (prv_send_query_wait_prefix_ok("AT+CEREG?\r\n", "+CEREG:",
                                           UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp)) &&
-            prv_parse_cereg_stat(rsp, &stat) &&
-            prv_is_boot_time_sync_cereg_ready_stat(stat)) {
-            return true;
+            prv_parse_cereg_stat(rsp, &stat)) {
+            if (prv_is_boot_time_sync_cereg_ready_stat(stat)) {
+                return true;
+            }
+            if ((stat == 2u) &&
+                ((poll_count % GW_CATM1_BOOT_CEREG_DIAG_STRIDE) == 0u)) {
+                prv_capture_attach_debug_snapshot(true);
+            }
+        } else if ((poll_count % GW_CATM1_BOOT_CEREG_DIAG_STRIDE) == 0u) {
+            prv_capture_attach_debug_snapshot(true);
         }
 
         prv_wait_rx_quiet(100u, 400u);
-        if ((uint32_t)(HAL_GetTick() - start) < timeout_ms) {
-            prv_delay_ms(1000u);
+        if ((uint32_t)(HAL_GetTick() - start) < effective_timeout_ms) {
+            prv_delay_ms(GW_CATM1_BOOT_CEREG_POLL_GAP_MS);
         }
     }
 
@@ -2230,6 +2456,8 @@ static void prv_finish_power_off_state(void)
     s_catm1_boot_sms_ready_seen = false;
     s_catm1_waiting_boot_sms_ready = false;
     s_catm1_tcp_open_fail_powerdown_pending = false;
+    s_catm1_expect_sms_ready_token = false;
+    s_catm1_session_sms_ready_loop_seen = false;
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_time_synced_from_urc_this_power = false;
@@ -3022,6 +3250,9 @@ void GW_Catm1_Init(void)
     s_catm1_boot_sms_ready_seen = false;
     s_catm1_waiting_boot_sms_ready = false;
     s_catm1_tcp_open_fail_powerdown_pending = false;
+    s_catm1_expect_sms_ready_token = false;
+    s_catm1_session_sms_ready_loop_seen = false;
+    s_catm1_sms_ready_loop_attempt_count = 0u;
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_time_synced_from_urc_this_power = false;
@@ -3048,6 +3279,8 @@ void GW_Catm1_PowerOn(void)
     s_catm1_boot_sms_ready_seen = false;
     s_catm1_waiting_boot_sms_ready = true;
     s_catm1_tcp_open_fail_powerdown_pending = false;
+    s_catm1_expect_sms_ready_token = false;
+    s_catm1_session_sms_ready_loop_seen = false;
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_time_synced_from_urc_this_power = false;
@@ -3223,16 +3456,23 @@ bool GW_Catm1_SyncTimeOnce(void)
     }
 
     for (attempt = 0u; attempt < GW_CATM1_STARTUP_SYNC_ATTEMPTS; attempt++) {
+        prv_begin_sms_ready_loop_attempt();
+
         if ((attempt > 0u) && !prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
             prv_force_power_cut();
         }
 
         if (!prv_start_session(false)) {
+            prv_finish_sms_ready_loop_attempt(false);
+            if (s_catm1_sms_ready_loop_attempt_count >= GW_CATM1_SMS_READY_LOOP_STOP_TRY) {
+                break;
+            }
             continue;
         }
 
         success = prv_sync_time_startup_ntp_then_network();
-        if (success) {
+        prv_finish_sms_ready_loop_attempt(success);
+        if (success || (s_catm1_sms_ready_loop_attempt_count >= GW_CATM1_SMS_READY_LOOP_STOP_TRY)) {
             break;
         }
     }
@@ -3272,7 +3512,9 @@ bool GW_Catm1_QueryAndStoreLoc(char* out_line, size_t out_sz)
     if (!prv_lpuart_ensure()) {
         goto cleanup;
     }
+    prv_begin_sms_ready_loop_attempt();
     if (!prv_start_session(true)) {
+        prv_finish_sms_ready_loop_attempt(false);
         goto cleanup;
     }
     if (prv_wait_eps_registered() && prv_wait_ps_attached()) {
@@ -3294,6 +3536,7 @@ bool GW_Catm1_QueryAndStoreLoc(char* out_line, size_t out_sz)
     success = true;
 
 cleanup:
+    prv_finish_sms_ready_loop_attempt(success);
     if (!prv_was_powered_off_recently(GW_CATM1_RECENT_POWEROFF_SKIP_MS)) {
         GW_Catm1_PowerOff();
     }
@@ -3419,7 +3662,9 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
     if (!prv_lpuart_ensure()) {
         goto cleanup;
     }
+    prv_begin_sms_ready_loop_attempt();
     if (!prv_start_session(true)) {
+        prv_finish_sms_ready_loop_attempt(false);
         goto cleanup;
     }
     if (!prv_wait_eps_registered()) {
@@ -3444,6 +3689,7 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
     prv_note_failed_snapshot_sent();
 
 cleanup:
+    prv_finish_sms_ready_loop_attempt(success);
     prv_close_tcp_and_force_power_cut(opened, rsp, sizeof(rsp));
     (void)pdp_active;
     prv_lpuart_release();
@@ -3486,7 +3732,9 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
     if (!prv_lpuart_ensure()) {
         goto cleanup;
     }
+    prv_begin_sms_ready_loop_attempt();
     if (!prv_start_session(true)) {
+        prv_finish_sms_ready_loop_attempt(false);
         goto cleanup;
     }
     if (!prv_wait_eps_registered()) {
@@ -3529,6 +3777,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
     success = ((*out_sent_count) > 0u);
 
 cleanup:
+    prv_finish_sms_ready_loop_attempt(success);
     prv_close_tcp_and_force_power_cut(opened, rsp, sizeof(rsp));
     (void)pdp_active;
     prv_lpuart_release();
