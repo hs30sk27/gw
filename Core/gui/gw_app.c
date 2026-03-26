@@ -1640,9 +1640,11 @@ static bool prv_start_sync_wait_mode(uint16_t duration_hours)
 
     prv_stop_ble_test_session(false);
     UI_BLE_SetPersistent(false);
-    if (UI_BLE_IsActive()) {
-        UI_BLE_Disable();
-    }
+    /*
+     * SYNC 대기 시작 시 BLE를 즉시 끄지 않는다.
+     * BLE OFF는 BLE END/타임오버 같은 기존 경로에서만 처리되게 두고,
+     * 여기서는 정시 sync wait radio state만 준비한다.
+     */
     (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
     prv_cancel_pending_beacon_burst();
     prv_evt_clear(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
