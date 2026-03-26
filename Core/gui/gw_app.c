@@ -1825,8 +1825,11 @@ void GW_App_Process(void)
             return;
         }
 
+        /* 부팅 직후 시간 동기화가 성공해도 곧바로 dormant stop으로 내려가면
+         * wake timer와 CAT-M1 periodic uplink 스케줄이 함께 지워져 이후 TCP 전송이 시작되지 않는다.
+         * 시간 기준만 갱신한 뒤 즉시 스케줄 재평가로 복귀시켜 다음 beacon/RX/TCP slot을 계속 타게 한다. */
         prv_hour_rec_init(prv_get_current_cycle_timestamp_sec());
-        prv_enter_dormant_stop_mode();
+        prv_request_schedule_recheck_now();
         return;
     }
 

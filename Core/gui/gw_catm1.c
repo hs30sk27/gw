@@ -47,6 +47,7 @@ static bool s_catm1_bandcfg_applied_this_power = false;
 static bool s_catm1_time_synced_from_urc_this_power = false;
 static bool s_catm1_pending_psuttz_valid = false;
 static uint64_t s_catm1_pending_psuttz_epoch_centi = 0u;
+static bool s_catm1_tcp_send_session_active = false;
 static bool s_catm1_tcp_time_sync_pending = false;
 static bool s_catm1_boot_time_sync_strict_order_active = false;
 static volatile bool s_catm1_server_cmd_ind_seen = false;
@@ -496,6 +497,8 @@ static void prv_force_power_cut(void);
 static bool prv_was_powered_off_recently(uint32_t window_ms);
 static void prv_abort_tcp_open_and_power_off(uint32_t caopen_ms);
 static void prv_shutdown_modem_prefer_poweroff(void);
+static void prv_shutdown_modem_after_tcp_close(void);
+static bool prv_try_normal_power_down(bool reduce_current_first);
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz);
 static void prv_note_failed_snapshot_sent(void);
 static bool prv_wait_eps_registered(void);
@@ -518,6 +521,7 @@ static bool prv_recover_boot_time_sync_registration(void);
 static void prv_prepare_low_current_before_poweroff(void);
 static bool prv_have_time_from_boot_urc_this_power(void);
 static bool prv_apply_pending_psuttz_time(bool notify_hook);
+static void prv_consume_deferred_tcp_session_time_sync(void);
 static bool prv_force_cclk_time_sync(uint32_t max_try, uint32_t gap_ms, bool notify_hook);
 static bool prv_force_cclk_time_sync_after_ctzu(bool notify_hook);
 static bool prv_finish_time_sync_from_boot_urc(bool notify_hook);
@@ -703,6 +707,18 @@ static bool prv_apply_pending_psuttz_time_with_cclk(bool notify_hook)
     return prv_apply_pending_psuttz_time(notify_hook);
 }
 
+static void prv_consume_deferred_tcp_session_time_sync(void)
+{
+    if (!s_catm1_pending_psuttz_valid) {
+        return;
+    }
+
+    /* TCP 전송 중 비동기 +PSUTTZ/*PSUTTZ가 들어오면 즉시 UI_Hook_OnTimeChanged()를
+     * 올리지 말고, 현재 uplink가 끝난 뒤 조용히 시간을 반영한다.
+     * 가능하면 AT+CCLK?로 한 번 더 보정하고, 실패하면 보관해 둔 URC epoch를 쓴다. */
+    (void)prv_apply_pending_psuttz_time_with_cclk(false);
+}
+
 static bool prv_force_cclk_time_sync(uint32_t max_try, uint32_t gap_ms, bool notify_hook)
 {
     uint64_t epoch_centi = 0u;
@@ -783,7 +799,7 @@ static bool prv_try_consume_async_urc_line(const char* line, size_t line_len)
     tmp[copy_len] = '\0';
 
     if (prv_parse_psuttz_epoch(tmp, &epoch_centi)) {
-        if (s_catm1_boot_time_sync_strict_order_active) {
+        if (s_catm1_boot_time_sync_strict_order_active || s_catm1_tcp_send_session_active) {
             s_catm1_pending_psuttz_epoch_centi = epoch_centi;
             s_catm1_pending_psuttz_valid = true;
         } else {
@@ -2093,7 +2109,11 @@ static bool prv_prepare_tcp_send_user_sequence(void)
         return false;
     }
 
-    if (!prv_activate_boot_time_pdp()) {
+    if (!prv_wait_ps_attached()) {
+        return false;
+    }
+
+    if (!prv_activate_pdp()) {
         return false;
     }
 
@@ -2661,6 +2681,7 @@ static void prv_finish_power_off_state(void)
     s_catm1_time_synced_from_urc_this_power = false;
     s_catm1_pending_psuttz_valid = false;
     s_catm1_pending_psuttz_epoch_centi = 0u;
+    s_catm1_tcp_send_session_active = false;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
@@ -2714,58 +2735,42 @@ static void prv_shutdown_modem_prefer_poweroff(void)
     prv_force_power_cut();
 }
 
+static void prv_shutdown_modem_after_tcp_close(void)
+{
+    bool normal_pd = false;
+
+    if (prv_lpuart_is_inited() && s_catm1_session_at_ok) {
+        /* User-requested TCP teardown path:
+         * CACLOSE -> OK -> CPOWD=1 without the extra CFUN=0 wait path. */
+        normal_pd = prv_try_normal_power_down(false);
+    }
+
+#if defined(PWR_KEY_Pin)
+    if (!normal_pd) {
+        HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_ACTIVE_STATE);
+        prv_delay_ms(UI_CATM1_PWRKEY_OFF_PULSE_MS);
+        HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
+        prv_delay_ms(UI_CATM1_PWRDOWN_WAIT_MS);
+    }
+#endif
+#if defined(CATM1_PWR_Pin)
+    HAL_GPIO_WritePin(CATM1_PWR_GPIO_Port, CATM1_PWR_Pin, GPIO_PIN_RESET);
+#endif
+    prv_finish_power_off_state();
+}
+
 static bool prv_close_tcp_socket_gracefully(char* rsp, size_t rsp_sz)
 {
-    uint8_t ch = 0u;
-    uint32_t start = HAL_GetTick();
-    size_t n = 0u;
-
     if ((rsp == NULL) || (rsp_sz == 0u)) {
         return false;
     }
 
+    /* SIM7080 CACLOSE write command completes on OK.
+     * Do not wait for +CACLOSE/+CASTATE URC here; the next command can
+     * follow immediately after OK. */
     rsp[0] = '\0';
-    prv_uart_flush_rx();
-    if (!prv_uart_send_text("AT+CACLOSE=0\r\n", UI_CATM1_AT_TIMEOUT_MS)) {
-        return false;
-    }
-
-    while ((uint32_t)(HAL_GetTick() - start) < (UI_CATM1_AT_TIMEOUT_MS + 2000u)) {
-        if (!prv_catm1_rb_pop_wait(&ch, 20u)) {
-            continue;
-        }
-        if (ch == 0u) {
-            continue;
-        }
-
-        if ((n + 1u) < rsp_sz) {
-            rsp[n++] = (char)ch;
-            rsp[n] = '\0';
-        } else if (rsp_sz > 16u) {
-            size_t keep = (rsp_sz / 2u);
-            memmove(rsp, &rsp[rsp_sz - keep - 1u], keep);
-            n = keep;
-            rsp[n++] = (char)ch;
-            rsp[n] = '\0';
-        }
-
-        prv_filter_async_urc_buffer(rsp);
-        n = strlen(rsp);
-
-        if ((strstr(rsp, "+CACLOSE: 0") != NULL) ||
-            (strstr(rsp, "+CACLOSE:0") != NULL) ||
-            (strstr(rsp, "+CASTATE: 0,0") != NULL) ||
-            (strstr(rsp, "+CASTATE:0,0") != NULL)) {
-            return true;
-        }
-        if ((strstr(rsp, "ERROR") != NULL) || (strstr(rsp, "+CME ERROR") != NULL)) {
-            return false;
-        }
-    }
-
-    return ((strstr(rsp, "\r\nOK\r\n") != NULL) ||
-            (strstr(rsp, "\nOK\r\n") != NULL) ||
-            (strstr(rsp, "\nOK\n") != NULL));
+    return prv_send_cmd_wait("AT+CACLOSE=0\r\n", "OK", NULL, NULL,
+                             UI_CATM1_AT_TIMEOUT_MS, rsp, rsp_sz);
 }
 
 static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp_sz)
@@ -2777,7 +2782,8 @@ static void prv_close_tcp_and_force_power_cut(bool opened, char* rsp, size_t rsp
 
     if (opened) {
         (void)prv_close_tcp_socket_gracefully(rsp, rsp_sz);
-        prv_delay_ms(GW_CATM1_TCP_POST_CLOSE_POWER_CUT_GUARD_MS);
+        prv_shutdown_modem_after_tcp_close();
+        return;
     }
     prv_shutdown_modem_prefer_poweroff();
 }
@@ -3509,6 +3515,7 @@ void GW_Catm1_Init(void)
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_time_synced_from_urc_this_power = false;
+    s_catm1_tcp_send_session_active = false;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
@@ -3537,6 +3544,7 @@ void GW_Catm1_PowerOn(void)
     s_catm1_last_caopen_ms = 0u;
     s_catm1_time_auto_update_attempted_this_power = false;
     s_catm1_time_synced_from_urc_this_power = false;
+    s_catm1_tcp_send_session_active = false;
     s_catm1_tcp_time_sync_pending = false;
     s_catm1_server_cmd_ind_seen = false;
     s_catm1_startup_apn_configured_this_power = false;
@@ -3578,12 +3586,32 @@ static void prv_prepare_low_current_before_poweroff(void)
     }
 }
 
-void GW_Catm1_PowerOff(void)
+static bool prv_try_normal_power_down(bool reduce_current_first)
 {
     char rsp[UI_CATM1_RX_BUF_SZ];
+
+#if defined(PWR_KEY_Pin)
+    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
+#endif
+    if (!prv_lpuart_is_inited() || !s_catm1_session_at_ok) {
+        return false;
+    }
+    if (reduce_current_first) {
+        prv_prepare_low_current_before_poweroff();
+    }
+    if (!prv_send_cmd_wait("AT+CPOWD=1\r\n", "NORMAL POWER DOWN", "OK", NULL,
+                           UI_CATM1_PWRDOWN_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+
+    prv_delay_ms(UI_CATM1_PWRDOWN_WAIT_MS);
+    return true;
+}
+
+void GW_Catm1_PowerOff(void)
+{
     bool normal_pd = false;
     bool fast_pd = s_catm1_tcp_open_fail_powerdown_pending;
-    uint32_t pd_timeout_ms = UI_CATM1_PWRDOWN_TIMEOUT_MS;
     uint32_t pd_wait_ms = UI_CATM1_PWRDOWN_WAIT_MS;
 
     if (fast_pd) {
@@ -3615,18 +3643,8 @@ void GW_Catm1_PowerOff(void)
         return;
     }
 
-#if defined(PWR_KEY_Pin)
-    HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_INACTIVE_STATE);
-#endif
-    if (prv_lpuart_is_inited() && s_catm1_session_at_ok) {
-        /* Reduce current first, then perform normal power down. */
-        prv_prepare_low_current_before_poweroff();
-        if (prv_send_cmd_wait("AT+CPOWD=1\r\n", "NORMAL POWER DOWN", "OK", NULL,
-                              pd_timeout_ms, rsp, sizeof(rsp))) {
-            normal_pd = true;
-            prv_delay_ms(pd_wait_ms);
-        }
-    }
+    /* Default session shutdown path keeps the low-current CFUN=0 step first. */
+    normal_pd = prv_try_normal_power_down(true);
 #if defined(PWR_KEY_Pin)
     if (!normal_pd) {
         HAL_GPIO_WritePin(PWR_KEY_GPIO_Port, PWR_KEY_Pin, UI_CATM1_PWRKEY_ACTIVE_STATE);
@@ -3926,6 +3944,7 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
         prv_finish_sms_ready_loop_attempt(false);
         goto cleanup;
     }
+    s_catm1_tcp_send_session_active = true;
     if (!prv_prepare_tcp_send_user_sequence()) {
         goto cleanup;
     }
@@ -3942,6 +3961,8 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
     prv_note_failed_snapshot_sent();
 
 cleanup:
+    prv_consume_deferred_tcp_session_time_sync();
+    s_catm1_tcp_send_session_active = false;
     prv_finish_sms_ready_loop_attempt(success);
     prv_close_tcp_and_force_power_cut(opened, rsp, sizeof(rsp));
     (void)pdp_active;
@@ -3990,6 +4011,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         prv_finish_sms_ready_loop_attempt(false);
         goto cleanup;
     }
+    s_catm1_tcp_send_session_active = true;
     if (!prv_prepare_tcp_send_user_sequence()) {
         goto cleanup;
     }
@@ -4024,6 +4046,8 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
     success = ((*out_sent_count) > 0u);
 
 cleanup:
+    prv_consume_deferred_tcp_session_time_sync();
+    s_catm1_tcp_send_session_active = false;
     prv_finish_sms_ready_loop_attempt(success);
     prv_close_tcp_and_force_power_cut(opened, rsp, sizeof(rsp));
     (void)pdp_active;
