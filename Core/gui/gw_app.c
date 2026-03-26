@@ -119,7 +119,7 @@ static uint32_t prv_evt_fetch_and_clear_all(void)
 
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
-#define GW_RX_WINDOW_GUARD_MS   (1200u)
+#define GW_RX_WINDOW_GUARD_MS   (1800u)
 #define GW_RX_PRESTART_MS       (500u)
 #define GW_TX_EVT_SAFETY_WAKE_MS (80u)
 #define GW_RX_EVT_SAFETY_SLACK_MS (20u)
@@ -239,6 +239,7 @@ static uint32_t prv_flash_tx_pending_count(void);
 static void prv_flash_tx_note_sent(uint32_t sent_count);
 static void prv_exit_dormant_stop_mode(void);
 static void prv_enter_dormant_stop_mode(void);
+static void prv_enter_scheduled_stop_once(void);
 static void prv_led1_sync_blink_stop(void);
 static void prv_request_schedule_recheck_now(void);
 static bool prv_handle_boot_time_sync_beacon(void);
@@ -340,6 +341,21 @@ static void prv_enter_dormant_stop_mode(void)
 
     prv_evt_clear_all();
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
+}
+
+static void prv_enter_scheduled_stop_once(void)
+{
+    if (!s_inited) {
+        return;
+    }
+
+    /* boot-time CAT-M1 시간 확보가 끝난 뒤에는 dormant로 scheduler를 지우지 않고,
+     * 다음 RTC/UTIL wake 시 정시 beacon/RX/TCP가 계속 동작하도록 현재 스케줄만 유지한 채
+     * 한 번만 STOP에 들어간다. */
+    s_dormant_stop_mode = false;
+    prv_evt_clear_all();
+    prv_schedule_wakeup();
+    UI_LPM_EnterStopNow();
 }
 
 void GW_App_PrepareForDormantStop(void)
@@ -1640,11 +1656,9 @@ static bool prv_start_sync_wait_mode(uint16_t duration_hours)
 
     prv_stop_ble_test_session(false);
     UI_BLE_SetPersistent(false);
-    /*
-     * SYNC 대기 시작 시 BLE를 즉시 끄지 않는다.
-     * BLE OFF는 BLE END/타임오버 같은 기존 경로에서만 처리되게 두고,
-     * 여기서는 정시 sync wait radio state만 준비한다.
-     */
+    if (UI_BLE_IsActive()) {
+        UI_BLE_Disable();
+    }
     (void)UTIL_TIMER_Stop(&s_tmr_wakeup);
     prv_cancel_pending_beacon_burst();
     prv_evt_clear(GW_EVT_WAKEUP | GW_EVT_BEACON_ONESHOT |
@@ -1827,11 +1841,8 @@ void GW_App_Process(void)
             return;
         }
 
-        /* 부팅 직후 시간 동기화가 성공해도 곧바로 dormant stop으로 내려가면
-         * wake timer와 CAT-M1 periodic uplink 스케줄이 함께 지워져 이후 TCP 전송이 시작되지 않는다.
-         * 시간 기준만 갱신한 뒤 즉시 스케줄 재평가로 복귀시켜 다음 beacon/RX/TCP slot을 계속 타게 한다. */
         prv_hour_rec_init(prv_get_current_cycle_timestamp_sec());
-        prv_request_schedule_recheck_now();
+        prv_enter_scheduled_stop_once();
         return;
     }
 
