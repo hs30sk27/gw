@@ -351,7 +351,7 @@ static void prv_send_setting_read(void)
 static void prv_apply_gw_ble_name(uint8_t gw_num)
 {
     char ble_name[16];
-    (void)snprintf(ble_name, sizeof(ble_name), "GW NUM %u", (unsigned)gw_num);
+    (void)snprintf(ble_name, sizeof(ble_name), "BT GW %u", (unsigned)gw_num);
     (void)UI_BLE_ApplyDeviceName(ble_name);
 }
 

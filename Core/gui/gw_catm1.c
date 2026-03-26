@@ -528,6 +528,8 @@ static bool prv_finish_time_sync_from_boot_urc(bool notify_hook);
 static bool prv_wait_cereg_registered_fixed(uint32_t max_polls, uint32_t gap_ms);
 static bool prv_startup_time_sync_user_sequence(void);
 static bool prv_prepare_tcp_send_user_sequence(void);
+static bool prv_rsp_contains_ok_line(const char* rsp);
+static bool prv_query_tcp_connected_state(uint8_t cid);
 
 static void prv_catm1_rb_reset(void)
 {
@@ -2662,6 +2664,64 @@ static bool prv_parse_caopen_result(const char* rsp, uint8_t* out_cid, uint8_t* 
     return false;
 }
 
+static bool prv_rsp_contains_ok_line(const char* rsp)
+{
+    const char* line;
+    const char* end;
+
+    if (rsp == NULL) {
+        return false;
+    }
+
+    line = rsp;
+    while (*line != '\0') {
+        end = strchr(line, '\n');
+        if (end == NULL) {
+            end = line + strlen(line);
+        } else {
+            end++;
+        }
+
+        if (prv_is_trimmed_line_equal(line, end, "OK")) {
+            return true;
+        }
+
+        if (*end == '\0') {
+            break;
+        }
+        line = end;
+    }
+
+    return false;
+}
+
+static bool prv_query_tcp_connected_state(uint8_t cid)
+{
+    char rsp[UI_CATM1_RX_BUF_SZ];
+    const char* p;
+    unsigned q_cid = 0u;
+    unsigned state = 0u;
+
+    rsp[0] = '\0';
+    if (!prv_send_query_wait_prefix_ok("AT+CASTATE?\r\n", "+CASTATE:",
+                                       UI_CATM1_AT_TIMEOUT_MS, rsp, sizeof(rsp))) {
+        return false;
+    }
+
+    p = rsp;
+    while ((p = strstr(p, "+CASTATE:")) != NULL) {
+        if (((sscanf(p, "+CASTATE: %u,%u", &q_cid, &state) == 2) ||
+             (sscanf(p, "+CASTATE:%u,%u", &q_cid, &state) == 2))) {
+            if (((uint8_t)q_cid == cid) && (state == 1u)) {
+                return true;
+            }
+        }
+        p += 9; /* strlen("+CASTATE:") */
+    }
+
+    return false;
+}
+
 static void prv_mark_tcp_open_failure(uint32_t caopen_ms)
 {
     s_catm1_last_caopen_ms = caopen_ms;
@@ -2797,7 +2857,11 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
     uint8_t result = 0xFFu;
     uint32_t start;
     uint32_t timeout_ms = GW_CATM1_TCP_OPEN_HARD_TIMEOUT_MS;
+    uint32_t ok_seen_tick = 0u;
+    uint32_t next_state_query_tick = 0u;
     size_t n = 0u;
+    bool saw_ok = false;
+    bool saw_caopen = false;
 
     s_catm1_tcp_open_fail_powerdown_pending = false;
     s_catm1_last_caopen_ms = 0u;
@@ -2825,7 +2889,21 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
     start = HAL_GetTick();
     s_catm1_last_caopen_ms = start;
     while ((uint32_t)(HAL_GetTick() - start) < timeout_ms) {
+        uint32_t now = HAL_GetTick();
+
         if (!prv_catm1_rb_pop_wait(&ch, 20u)) {
+            if (saw_ok && !saw_caopen &&
+                ((uint32_t)(now - ok_seen_tick) >= 200u) &&
+                ((next_state_query_tick == 0u) || ((uint32_t)(now - next_state_query_tick) >= 400u))) {
+                next_state_query_tick = now;
+                if (prv_query_tcp_connected_state(0u)) {
+                    s_catm1_last_caopen_ms = 0u;
+                    s_catm1_tcp_open_fail_powerdown_pending = false;
+                    s_catm1_tcp_time_sync_pending = true;
+                    prv_delay_ms(UI_CATM1_QUERY_OK_IDLE_MS);
+                    return true;
+                }
+            }
             continue;
         }
         if (ch == 0u) {
@@ -2849,17 +2927,42 @@ static bool prv_open_tcp(const uint8_t ip[4], uint16_t port)
             return false;
         }
 
-        if (prv_parse_caopen_result(rsp, &cid, &result) && (cid == 0u)) {
-            if (result == 0u) {
-                s_catm1_last_caopen_ms = 0u;
-                s_catm1_tcp_open_fail_powerdown_pending = false;
-                s_catm1_tcp_time_sync_pending = true;
-                return true;
-            }
-            /* +CAOPEN: 0,23 등 비정상 결과는 여기서 즉시 power off 처리한다. */
-            prv_abort_tcp_open_and_power_off(start);
-            return false;
+        if (!saw_ok && prv_rsp_contains_ok_line(rsp)) {
+            saw_ok = true;
+            ok_seen_tick = HAL_GetTick();
         }
+
+        if (!saw_caopen && prv_parse_caopen_result(rsp, &cid, &result) && (cid == 0u)) {
+            saw_caopen = true;
+            if (result != 0u) {
+                /* +CAOPEN: 0,23 등 비정상 결과는 여기서 즉시 power off 처리한다. */
+                prv_abort_tcp_open_and_power_off(start);
+                return false;
+            }
+        }
+
+        /* SIM7080 문서상 CAOPEN write command는 최종 OK까지 받아야 다음 AT를 보낼 수 있고,
+         * asyncOpen_enable 설정에 따라 응답 순서가
+         *   1) +CAOPEN -> OK
+         *   2) OK -> +CAOPEN
+         * 둘 다 가능하다. 둘 중 하나만 본 상태에서는 다음 CASEND로 넘어가지 않는다. */
+        if (saw_caopen && saw_ok) {
+            s_catm1_last_caopen_ms = 0u;
+            s_catm1_tcp_open_fail_powerdown_pending = false;
+            s_catm1_tcp_time_sync_pending = true;
+            prv_delay_ms(UI_CATM1_QUERY_OK_IDLE_MS);
+            return true;
+        }
+    }
+
+    /* +CAOPEN URC를 못 봤더라도 final OK 이후 실제 socket state가 connected면
+     * 곧바로 CASEND로 진행할 수 있게 마지막으로 한 번 더 확인한다. */
+    if (saw_ok && prv_query_tcp_connected_state(0u)) {
+        s_catm1_last_caopen_ms = 0u;
+        s_catm1_tcp_open_fail_powerdown_pending = false;
+        s_catm1_tcp_time_sync_pending = true;
+        prv_delay_ms(UI_CATM1_QUERY_OK_IDLE_MS);
+        return true;
     }
 
     /* +CAOPEN result URC는 망 상태에 따라 수 초 늦게 올 수 있으므로
