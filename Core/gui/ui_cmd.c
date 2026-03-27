@@ -29,6 +29,16 @@ __weak bool UI_Hook_OnSyncRequested(uint16_t duration_hours)
     return false;
 }
 
+__weak bool UI_Hook_IsTcpEnabled(void)
+{
+    return true;
+}
+
+__weak void UI_Hook_OnTcpModeChanged(bool enabled)
+{
+    (void)enabled;
+}
+
 /* -------------------------------------------------------------------------- */
 static bool s_cmd_silent_reply = false;
 static bool prv_cmd_equals_relaxed(const char* s, const char* base);
@@ -172,6 +182,18 @@ static bool prv_is_plain_safe_command(const char* s)
     }
     if (prv_match_cmd_head(s, "GW TCPIP", &tail)) {
         (void)tail;
+        return true;
+    }
+    if (prv_cmd_equals_relaxed(s, "TCP ON")) {
+        return true;
+    }
+    if (prv_cmd_equals_relaxed(s, "GW TCP ON")) {
+        return true;
+    }
+    if (prv_cmd_equals_relaxed(s, "TCP OFF")) {
+        return true;
+    }
+    if (prv_cmd_equals_relaxed(s, "GW TCP OFF")) {
         return true;
     }
     if (prv_cmd_equals_relaxed(s, "FILE LIST")) {
@@ -342,6 +364,10 @@ static void prv_send_setting_read(void)
                    (unsigned)cfg->tcpip_ip[0], (unsigned)cfg->tcpip_ip[1],
                    (unsigned)cfg->tcpip_ip[2], (unsigned)cfg->tcpip_ip[3],
                    (unsigned)cfg->tcpip_port);
+    UI_UART_SendString(line);
+
+    (void)snprintf(line, sizeof(line), "TCP:%s\r\n",
+                   UI_Hook_IsTcpEnabled() ? "ON" : "OFF");
     UI_UART_SendString(line);
 
     (void)snprintf(line, sizeof(line), "LOC:%s\r\n", UI_GetLocAscii());
@@ -572,6 +598,18 @@ static void prv_process_line_impl(const char* line_in, bool silent)
 
         UI_SetSetting(v, unit);
         (void)prv_commit_setting_changed(v, unit);
+        return;
+    }
+
+    /* -------------------- TCP ON/OFF -------------------- */
+    if (prv_cmd_equals_relaxed(p, "TCP ON") || prv_cmd_equals_relaxed(p, "GW TCP ON")) {
+        UI_Hook_OnTcpModeChanged(true);
+        prv_send_ok();
+        return;
+    }
+    if (prv_cmd_equals_relaxed(p, "TCP OFF") || prv_cmd_equals_relaxed(p, "GW TCP OFF")) {
+        UI_Hook_OnTcpModeChanged(false);
+        prv_send_ok();
         return;
     }
 

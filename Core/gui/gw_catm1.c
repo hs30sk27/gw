@@ -1,4 +1,5 @@
 #include "gw_catm1.h"
+#include "gw_app.h"
 #include "ui_conf.h"
 #include "ui_types.h"
 #include "ui_time.h"
@@ -4023,7 +4024,7 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
     size_t len;
     GW_HourRec_t live_rec;
 
-    if (rec == NULL) {
+    if ((!GW_App_IsTcpEnabled()) || (rec == NULL)) {
         return false;
     }
 
@@ -4032,8 +4033,10 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
     }
     should_store_on_fail = true;
 
-    if (prv_tcp_blocked_by_ble()) {
-        (void)prv_store_failed_snapshot_to_flash(&live_rec);
+    if ((!GW_App_IsTcpEnabled()) || prv_tcp_blocked_by_ble()) {
+        if (GW_App_IsTcpEnabled()) {
+            (void)prv_store_failed_snapshot_to_flash(&live_rec);
+        }
         return false;
     }
 
@@ -4042,8 +4045,10 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
         return false;
     }
 
-    if (prv_tcp_blocked_by_ble()) {
-        (void)prv_store_failed_snapshot_to_flash(&live_rec);
+    if ((!GW_App_IsTcpEnabled()) || prv_tcp_blocked_by_ble()) {
+        if (GW_App_IsTcpEnabled()) {
+            (void)prv_store_failed_snapshot_to_flash(&live_rec);
+        }
         return false;
     }
 
@@ -4059,15 +4064,15 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
         goto cleanup;
     }
     s_catm1_tcp_send_session_active = true;
-    if (!prv_prepare_tcp_send_user_sequence()) {
+    if ((!GW_App_IsTcpEnabled()) || !prv_prepare_tcp_send_user_sequence()) {
         goto cleanup;
     }
     pdp_active = true;
-    if (!prv_open_tcp(ip, port)) {
+    if ((!GW_App_IsTcpEnabled()) || !prv_open_tcp(ip, port)) {
         goto cleanup;
     }
     opened = true;
-    if (!prv_send_tcp_payload(payload)) {
+    if ((!GW_App_IsTcpEnabled()) || !prv_send_tcp_payload(payload)) {
         goto cleanup;
     }
     prv_receive_server_cmd_after_first_payload();
@@ -4083,7 +4088,7 @@ cleanup:
     prv_lpuart_release();
     GW_Catm1_SetBusy(false);
     UI_LPM_UnlockStop();
-    if ((!success) && should_store_on_fail) {
+    if ((!success) && should_store_on_fail && GW_App_IsTcpEnabled()) {
         (void)prv_store_failed_snapshot_to_flash(&live_rec);
     }
     return success;
@@ -4104,7 +4109,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
     if (out_sent_count != NULL) {
         *out_sent_count = 0u;
     }
-    if ((max_count == 0u) || (out_sent_count == NULL)) {
+    if ((!GW_App_IsTcpEnabled()) || (max_count == 0u) || (out_sent_count == NULL)) {
         return false;
     }
     if (!GW_Storage_ReadRecordByGlobalIndex(first_rec_index, &file_rec, NULL)) {
@@ -4126,11 +4131,11 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         goto cleanup;
     }
     s_catm1_tcp_send_session_active = true;
-    if (!prv_prepare_tcp_send_user_sequence()) {
+    if ((!GW_App_IsTcpEnabled()) || !prv_prepare_tcp_send_user_sequence()) {
         goto cleanup;
     }
     pdp_active = true;
-    if (!prv_open_tcp(ip, port)) {
+    if ((!GW_App_IsTcpEnabled()) || !prv_open_tcp(ip, port)) {
         goto cleanup;
     }
     opened = true;
@@ -4139,7 +4144,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         size_t len;
         GW_HourRec_t tx_rec;
 
-        if (prv_tcp_blocked_by_ble()) {
+        if ((!GW_App_IsTcpEnabled()) || prv_tcp_blocked_by_ble()) {
             break;
         }
         if (!GW_Storage_ReadRecordByGlobalIndex(first_rec_index + i, &file_rec, NULL)) {
@@ -4152,7 +4157,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         if (len == 0u) {
             break;
         }
-        if (!prv_send_tcp_payload(payload)) {
+        if ((!GW_App_IsTcpEnabled()) || !prv_send_tcp_payload(payload)) {
             break;
         }
         if ((*out_sent_count) == 0u) {

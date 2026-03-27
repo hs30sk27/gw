@@ -38,6 +38,7 @@ typedef enum {
 
 static GW_State_t s_state = GW_STATE_IDLE;
 static bool s_inited = false;
+static bool s_tcp_enabled = true;
 static UTIL_TIMER_Object_t s_tmr_wakeup;
 static UTIL_TIMER_Object_t s_tmr_led1_pulse;
 static UTIL_TIMER_Object_t s_tmr_ble_test_expire;
@@ -241,6 +242,7 @@ static bool prv_live_uplink_already_sent(const GW_HourRec_t* rec);
 static void prv_note_live_uplink_sent(const GW_HourRec_t* rec);
 static bool prv_backlog_batch_included_live_record(uint32_t first_index, uint32_t sent_count, const GW_HourRec_t* rec);
 static uint32_t prv_flash_tx_pending_count(void);
+static void prv_flash_tx_reset_to_tail(void);
 static void prv_flash_tx_note_sent(uint32_t sent_count);
 static void prv_exit_dormant_stop_mode(void);
 static void prv_enter_dormant_stop_mode(void);
@@ -423,7 +425,7 @@ static void prv_sanitize_unreceived_nodes(GW_HourRec_t* rec, uint64_t rx_seen_ma
 
 bool GW_App_CopyTcpSnapshotRecord(const GW_HourRec_t* src, GW_HourRec_t* dst)
 {
-    if ((src == NULL) || (dst == NULL)) {
+    if ((!s_tcp_enabled) || (src == NULL) || (dst == NULL)) {
         return false;
     }
 
@@ -900,6 +902,9 @@ static void prv_mark_cycle_complete(const GW_HourRec_t* rec)
 
 static bool prv_should_try_catm1_uplink_now(uint32_t now_sec)
 {
+    if (!s_tcp_enabled) {
+        return false;
+    }
     if (!s_catm1_uplink_pending) {
         return false;
     }
@@ -1002,6 +1007,12 @@ static void prv_flash_tx_reset_to_tail(void)
 static uint32_t prv_flash_tx_pending_count(void)
 {
     uint32_t tail = GW_Storage_GetTotalRecordCount();
+
+    if (!s_tcp_enabled) {
+        s_flash_tx_boot_tail_index = tail;
+        s_flash_tx_next_send_index = tail;
+        return 0u;
+    }
     if (s_flash_tx_boot_tail_index > tail) {
         s_flash_tx_boot_tail_index = tail;
     }
@@ -1081,9 +1092,67 @@ static void prv_flash_tx_resync_after_storage_change(void)
     }
 }
 
+bool GW_App_IsTcpEnabled(void)
+{
+    return s_tcp_enabled;
+}
+
+static void prv_abort_pending_tcp_uplink_state(void)
+{
+    s_catm1_uplink_pending = false;
+    s_catm1_immediate_try_pending = false;
+    s_catm1_retry_not_before_ms = 0u;
+    s_last_catm1_slot_id = 0xFFFFFFFFu;
+    s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
+    s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
+    s_last_2m_prep_slot_id = 0xFFFFFFFFu;
+}
+
+static void prv_reset_tcp_live_record_state(void)
+{
+    uint32_t epoch_sec;
+
+    s_last_cycle_valid = false;
+    s_last_cycle_nodes_seen_mask_valid = false;
+    s_rx_nodes_seen_mask = 0u;
+    epoch_sec = UI_Time_IsValid() ? UI_Time_NowSec2016()
+                                  : prv_get_current_cycle_timestamp_sec();
+    s_rx_cycle_stamp_sec = epoch_sec;
+    prv_hour_rec_init(epoch_sec);
+}
+
+static void prv_apply_tcp_mode_change(bool enabled)
+{
+    if (s_tcp_enabled == enabled) {
+        if (s_inited) {
+            prv_schedule_wakeup();
+        }
+        return;
+    }
+
+    s_tcp_enabled = enabled;
+    prv_abort_pending_tcp_uplink_state();
+    prv_flash_tx_reset_to_tail();
+
+    if (enabled) {
+        prv_reset_tcp_live_record_state();
+    }
+
+    if (!s_inited) {
+        return;
+    }
+
+    prv_exit_dormant_stop_mode();
+    prv_schedule_wakeup();
+}
+
 static bool prv_save_hour_rec_verified(const GW_HourRec_t* rec)
 {
     uint32_t before_cnt;
+
+    if (!s_tcp_enabled) {
+        return false;
+    }
     uint32_t after_cnt;
     uint32_t try_idx;
 
@@ -1130,6 +1199,9 @@ static void prv_handle_test50_actions_core(uint32_t now_sec, bool treat_as_minut
 {
     uint32_t now_minute_id = now_sec / 60u;
 
+    if (!s_tcp_enabled) {
+        return;
+    }
     if (!treat_as_minute_test) {
         return;
     }
@@ -1198,6 +1270,9 @@ static void prv_stop_ble_test_session(bool disable_ble_now)
 static bool prv_is_catm1_periodic_active(void)
 {
     uint32_t cycle_sec;
+    if (!s_tcp_enabled) {
+        return false;
+    }
     if (!UI_Time_IsValid()) {
         return false;
     }
@@ -1254,11 +1329,17 @@ static bool prv_last_cycle_matches_slot(uint32_t period_sec, uint32_t slot_id)
 
 static void prv_request_catm1_uplink(void)
 {
+    if (!s_tcp_enabled) {
+        return;
+    }
     s_catm1_uplink_pending = true;
 }
 
 static void prv_request_catm1_uplink_immediate(void)
 {
+    if (!s_tcp_enabled) {
+        return;
+    }
     s_catm1_uplink_pending = true;
     s_catm1_immediate_try_pending = true;
 }
@@ -1279,6 +1360,9 @@ static void prv_request_minute_test_uplink_for_minute(uint32_t minute_id)
 
 static const GW_HourRec_t* prv_get_catm1_uplink_record(void)
 {
+    if (!s_tcp_enabled) {
+        return NULL;
+    }
     if (s_last_cycle_valid) {
         return &s_last_cycle_rec;
     }
@@ -1293,6 +1377,10 @@ static bool prv_run_catm1_uplink_now(void)
 
     (void)now_ms;
 
+    if (!s_tcp_enabled) {
+        prv_abort_pending_tcp_uplink_state();
+        return false;
+    }
     if (!s_catm1_uplink_pending) {
         return false;
     }
@@ -2461,6 +2549,16 @@ void UI_Hook_OnConfigChanged(void)
     prv_schedule_wakeup();
 }
 
+bool UI_Hook_IsTcpEnabled(void)
+{
+    return GW_App_IsTcpEnabled();
+}
+
+void UI_Hook_OnTcpModeChanged(bool enabled)
+{
+    prv_apply_tcp_mode_change(enabled);
+}
+
 void UI_Hook_OnSettingChanged(uint8_t value, char unit)
 {
     (void)value;
@@ -2629,10 +2727,12 @@ static void prv_close_rx_cycle_and_commit(void)
             }
         }
     } else {
-        bool saved_ok = prv_save_hour_rec_verified(&s_hour_rec);
-        prv_flash_tx_note_saved(saved_ok);
-        GW_Storage_PurgeOldFiles(s_hour_rec.epoch_sec);
-        prv_flash_tx_resync_after_storage_change();
+        if (s_tcp_enabled) {
+            bool saved_ok = prv_save_hour_rec_verified(&s_hour_rec);
+            prv_flash_tx_note_saved(saved_ok);
+            GW_Storage_PurgeOldFiles(s_hour_rec.epoch_sec);
+            prv_flash_tx_resync_after_storage_change();
+        }
         s_rx_cycle_minute_test = false;
         s_rx_cycle_stamp_sec = 0u;
     }

@@ -16,6 +16,7 @@
 #define GW_APP_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,9 @@ void GW_App_Process(void);
 
 /* BLE END/KEY로 강제 stop 진입할 때 GW 주기 wake source를 정리 */
 void GW_App_PrepareForDormantStop(void);
+
+/* GW TCP ON/OFF runtime gate */
+bool GW_App_IsTcpEnabled(void);
 
 /* Radio event에서 호출 (subghz_phy_app.c USER CODE에 삽입) */
 void GW_Radio_OnTxDone(void);
