@@ -15,6 +15,7 @@
 #include "stm32_timer.h"
 #include "stm32_seq.h"
 #include "radio.h"
+#include "main.h"
 #include <string.h>
 
 /* -------------------------------------------------------------------------- */
@@ -174,6 +175,7 @@ static bool s_boot_time_sync_beacon_pending = false;
 #define GW_SYNC_WAIT_MAX_HOURS         (8u)
 #define GW_SYNC_LED1_ON_MS             (200u)
 #define GW_SYNC_LED1_OFF_MS            (500u)
+#define GW_RADIO_LED_PULSE_MS          (50u)
 
 #ifndef GW_CATM1_RETRY_DELAY_MS
 #define GW_CATM1_RETRY_DELAY_MS        (120000u)
@@ -241,6 +243,7 @@ static void prv_exit_dormant_stop_mode(void);
 static void prv_enter_dormant_stop_mode(void);
 static void prv_enter_scheduled_stop_once(void);
 static void prv_led1_sync_blink_stop(void);
+static void prv_led1_blocking_pulse_ms(uint32_t pulse_ms);
 static void prv_request_schedule_recheck_now(void);
 static bool prv_handle_boot_time_sync_beacon(void);
 static void prv_mark_periodic_beacon_slot_consumed_if_due(uint32_t epoch_sec);
@@ -481,21 +484,37 @@ static void prv_led1_pulse_off_cb(void *context)
     prv_led1(false);
 }
 
-static void prv_led1_pulse_ms(uint32_t pulse_ms)
+static void prv_led1_blocking_pulse_ms(uint32_t pulse_ms)
 {
-    prv_led1_sync_blink_stop();
+#if UI_HAVE_LED1
+    bool restore_sync = s_led1_sync_blink_active;
+    bool restore_sync_on = s_led1_sync_blink_on;
+    uint32_t restore_ms = restore_sync
+                        ? (restore_sync_on ? GW_SYNC_LED1_ON_MS : GW_SYNC_LED1_OFF_MS)
+                        : 0u;
+
     if (pulse_ms == 0u) {
         pulse_ms = 1u;
     }
-    prv_led1(true);
-    (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
-    (void)UTIL_TIMER_SetPeriod(&s_tmr_led1_pulse, pulse_ms);
-    (void)UTIL_TIMER_Start(&s_tmr_led1_pulse);
-}
 
-static void prv_led1_pulse_10ms(void)
-{
-    prv_led1_pulse_ms(10u);
+    if (restore_sync) {
+        (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
+    }
+
+    prv_led1(true);
+    HAL_Delay(pulse_ms);
+
+    if (restore_sync) {
+        prv_led1(restore_sync_on);
+        (void)UTIL_TIMER_Stop(&s_tmr_led1_pulse);
+        (void)UTIL_TIMER_SetPeriod(&s_tmr_led1_pulse, restore_ms);
+        (void)UTIL_TIMER_Start(&s_tmr_led1_pulse);
+    } else {
+        prv_led1(false);
+    }
+#else
+    (void)pulse_ms;
+#endif
 }
 
 static bool prv_radio_ready_for_tx(void)
@@ -1700,7 +1719,6 @@ static bool prv_start_beacon_tx(uint32_t now_sec)
     }
     UI_LPM_LockStop();
     s_state = GW_STATE_BEACON_TX;
-    prv_led1_pulse_10ms();
     Radio.SetChannel(UI_RF_GetBeaconFreqHz());
     Radio.Send(s_beacon_tx_payload, UI_BEACON_PAYLOAD_LEN);
     prv_arm_busy_state_safety_wakeup(GW_TX_EVT_SAFETY_WAKE_MS);
@@ -1775,6 +1793,7 @@ void GW_App_Process(void)
                 s_state = GW_STATE_IDLE;
                 UI_LPM_UnlockStop();
                 s_beacon_counter++;
+                prv_led1_blocking_pulse_ms(GW_RADIO_LED_PULSE_MS);
                 prv_continue_sync_wait_or_stop();
             }
             return;
@@ -1800,6 +1819,7 @@ void GW_App_Process(void)
                 UI_LPM_UnlockStop();
 
                 is_sync_req = prv_is_sync_request_payload(s_rx_shadow, s_rx_shadow_size);
+                prv_led1_blocking_pulse_ms(GW_RADIO_LED_PULSE_MS);
 
                 if (is_sync_req && prv_start_sync_response_beacon_tx()) {
                     return;
@@ -1871,6 +1891,7 @@ void GW_App_Process(void)
             s_state = GW_STATE_IDLE;
             UI_LPM_UnlockStop();
             s_beacon_counter++;
+            prv_led1_blocking_pulse_ms(GW_RADIO_LED_PULSE_MS);
 
             if ((finished_kind == GW_BEACON_TX_KIND_SCHEDULED) &&
                 (s_active_periodic_beacon_slot_id != 0xFFFFFFFFu) &&
@@ -1941,18 +1962,18 @@ void GW_App_Process(void)
                     }
                 }
             }
-            if (accepted_node) {
-                /* RX 수신 시 LED pulse 제거: 수신 경로에서는 LED를 토글하지 않는다.
-                 * NOTE: 수신 즉시 조기 종료(early-close)를 하지 않는다.
-                 * max_nodes(s_rx_expected_nodes)보다 node_num이 큰 노드(예: max_nodes=1일 때
-                 * node1)는 expected_node=false로 처리되어 seen_mask에 기록되지 않는다.
-                 * 따라서 node0 수신 직후 early-close가 발생하면 node1의 패킷 수신 슬롯
-                 * (2초 뒤)을 완전히 놓치게 된다.
-                 * 대신 RX 타임아웃 경로(prv_rx_next_slot)에서 window 만료 또는
-                 * prv_rx_all_expected_nodes_seen() 조건으로 사이클을 닫는다.
-                 * 이 방식은 max_nodes 설정과 무관하게 윈도우 내 모든 노드를 수신한다. */
-            }
+            /* NOTE: 수신 즉시 조기 종료(early-close)를 하지 않는다.
+             * max_nodes(s_rx_expected_nodes)보다 node_num이 큰 노드(예: max_nodes=1일 때
+             * node1)는 expected_node=false로 처리되어 seen_mask에 기록되지 않는다.
+             * 따라서 node0 수신 직후 early-close가 발생하면 node1의 패킷 수신 슬롯
+             * (2초 뒤)을 완전히 놓치게 된다.
+             * 대신 RX 타임아웃 경로(prv_rx_next_slot)에서 window 만료 또는
+             * prv_rx_all_expected_nodes_seen() 조건으로 사이클을 닫는다.
+             * 이 방식은 max_nodes 설정과 무관하게 윈도우 내 모든 노드를 수신한다. */
             (void)prv_rearm_current_rx_slot();
+            if (accepted_node) {
+                prv_led1_blocking_pulse_ms(GW_RADIO_LED_PULSE_MS);
+            }
         }
         prv_requeue_events(ev & ~(GW_EVT_RADIO_RX_DONE));
         return;
