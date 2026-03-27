@@ -189,6 +189,7 @@ static bool s_boot_time_sync_beacon_pending = false;
 #endif
 
 static uint8_t s_beacon_tx_payload[UI_BEACON_PAYLOAD_LEN];
+static uint8_t s_beacon_tx_payload_len = 0u;
 static uint8_t s_rx_shadow[UI_NODE_PAYLOAD_LEN];
 static uint16_t s_rx_shadow_size = 0u;
 static int16_t s_rx_shadow_rssi = 0;
@@ -1706,13 +1707,18 @@ static bool prv_start_beacon_tx(uint32_t now_sec)
 
     UI_Time_Epoch2016_ToCalendar(now_sec, &dt);
     prv_get_effective_setting_ascii(setting_ascii);
-    (void)UI_Pkt_BuildBeacon(s_beacon_tx_payload, cfg->net_id, &dt, setting_ascii);
+    s_beacon_tx_payload_len = UI_Pkt_BuildBeacon(s_beacon_tx_payload, cfg->net_id, &dt, setting_ascii);
+    if ((s_beacon_tx_payload_len == 0u) || (s_beacon_tx_payload_len > UI_BEACON_PAYLOAD_LEN)) {
+        s_state = GW_STATE_IDLE;
+        UI_LPM_UnlockStop();
+        return false;
+    }
     if (!prv_radio_ready_for_tx()) {
         s_state = GW_STATE_IDLE;
         UI_LPM_UnlockStop();
         return false;
     }
-    if (!UI_Radio_PrepareTx(UI_BEACON_PAYLOAD_LEN)) {
+    if (!UI_Radio_PrepareTx(s_beacon_tx_payload_len)) {
         s_state = GW_STATE_IDLE;
         UI_LPM_UnlockStop();
         return false;
@@ -1720,7 +1726,7 @@ static bool prv_start_beacon_tx(uint32_t now_sec)
     UI_LPM_LockStop();
     s_state = GW_STATE_BEACON_TX;
     Radio.SetChannel(UI_RF_GetBeaconFreqHz());
-    Radio.Send(s_beacon_tx_payload, UI_BEACON_PAYLOAD_LEN);
+    Radio.Send(s_beacon_tx_payload, s_beacon_tx_payload_len);
     prv_arm_busy_state_safety_wakeup(GW_TX_EVT_SAFETY_WAKE_MS);
     return true;
 }
