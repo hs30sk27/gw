@@ -18,6 +18,15 @@ extern uint32_t GW_Storage_GetTotalRecordCount(void);
 extern void UI_Hook_OnTimeChanged(void);
 extern void UI_Hook_OnBootTimeSyncBeaconRequested(void);
 extern void UI_Hook_OnCatm1PowerFaultStopRequested(void);
+__attribute__((weak)) bool GW_App_CopyTcpSnapshotRecord(const GW_HourRec_t* src, GW_HourRec_t* dst)
+{
+    if ((src == NULL) || (dst == NULL)) {
+        return false;
+    }
+
+    *dst = *src;
+    return true;
+}
 static bool prv_parse_cereg_stat(const char* rsp, uint8_t* stat);
 
 static volatile bool s_catm1_busy = false;
@@ -3347,45 +3356,12 @@ static bool prv_node_valid(const GW_NodeRec_t* r)
     return false;
 }
 
-static uint32_t prv_get_configured_snapshot_node_limit(const UI_Config_t* cfg)
+static uint32_t prv_get_snapshot_node_limit(void)
 {
-    uint32_t limit;
-
-    if (cfg == NULL) {
-        return 0u;
-    }
-
-    limit = (uint32_t)cfg->max_nodes;
-    if (limit > UI_MAX_NODES) {
-        limit = UI_MAX_NODES;
-    }
-    return limit;
-}
-
-static uint32_t prv_get_highest_present_node_plus_one(const GW_HourRec_t* rec)
-{
-    uint32_t i;
-
-    if (rec == NULL) {
-        return 0u;
-    }
-
-    for (i = UI_MAX_NODES; i > 0u; i--) {
-        if (prv_node_valid(&rec->nodes[i - 1u])) {
-            return i;
-        }
-    }
-    return 0u;
-}
-
-static uint32_t prv_get_snapshot_node_limit(const GW_HourRec_t* rec, const UI_Config_t* cfg)
-{
-    uint32_t cfg_limit = prv_get_configured_snapshot_node_limit(cfg);
-    uint32_t record_limit = prv_get_highest_present_node_plus_one(rec);
-
-    /* 현재 ND CNT 범위(cfg->max_nodes) 안에서는 미수신 노드도 placeholder로 유지한다.
-     * 동시에 record에 이미 들어 있는 더 큰 node_num은 설정 변경 후에도 사라지지 않게 보존한다. */
-    return (record_limit > cfg_limit) ? record_limit : cfg_limit;
+    /* TCP payload는 설정값(max_nodes)보다 실제 record 내용을 우선한다.
+     * 최신 설정/명령 반영이 어긋나도 이미 받은 ND 데이터가 서버 payload에서
+     * 사라지지 않도록 record 전체 범위를 스캔한다. */
+    return UI_MAX_NODES;
 }
 
 static bool prv_is_ascii_space(char ch)
@@ -3531,7 +3507,6 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
     size_t len = 0u;
     uint32_t i;
     uint32_t node_limit;
-    uint32_t cfg_node_limit;
     bool truncated = false;
     char set0, set1, set2;
     char loc_buf[192];
@@ -3544,8 +3519,7 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
     }
 
     out[0] = '\0';
-    cfg_node_limit = prv_get_configured_snapshot_node_limit(cfg);
-    node_limit = prv_get_snapshot_node_limit(rec, cfg);
+    node_limit = prv_get_snapshot_node_limit();
     prv_get_loc_ascii_safe(loc_buf, sizeof(loc_buf));
     set0 = (char)cfg->setting_ascii[0];
     set1 = (char)cfg->setting_ascii[1];
@@ -3570,19 +3544,8 @@ static size_t prv_build_snapshot_payload(const GW_HourRec_t* rec, char* out, siz
         const char* node_volt_text;
         int node_temp_c;
         bool icm_valid;
-        bool node_valid = prv_node_valid(r);
 
-        if (!node_valid) {
-            if (i >= cfg_node_limit) {
-                continue;
-            }
-            if ((out_sz - len) < 24u) {
-                truncated = true;
-                break;
-            }
-            prv_append_fmt(out, out_sz, &len,
-                           ",ND:%02lu,V:-,T:-",
-                           (unsigned long)i);
+        if (!prv_node_valid(r)) {
             continue;
         }
         if ((out_sz - len) < 128u) {
@@ -4064,7 +4027,9 @@ bool GW_Catm1_SendSnapshot(const GW_HourRec_t* rec)
         return false;
     }
 
-    live_rec = *rec;
+    if (!GW_App_CopyTcpSnapshotRecord(rec, &live_rec)) {
+        return false;
+    }
     should_store_on_fail = true;
 
     if (prv_tcp_blocked_by_ble()) {
@@ -4172,6 +4137,7 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
 
     for (i = 0u; i < max_count; i++) {
         size_t len;
+        GW_HourRec_t tx_rec;
 
         if (prv_tcp_blocked_by_ble()) {
             break;
@@ -4179,7 +4145,10 @@ bool GW_Catm1_SendStoredRange(uint32_t first_rec_index, uint32_t max_count, uint
         if (!GW_Storage_ReadRecordByGlobalIndex(first_rec_index + i, &file_rec, NULL)) {
             break;
         }
-        len = prv_build_snapshot_payload(&file_rec.rec, payload, sizeof(payload));
+        if (!GW_App_CopyTcpSnapshotRecord(&file_rec.rec, &tx_rec)) {
+            break;
+        }
+        len = prv_build_snapshot_payload(&tx_rec, payload, sizeof(payload));
         if (len == 0u) {
             break;
         }

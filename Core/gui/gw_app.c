@@ -121,7 +121,6 @@ static uint32_t prv_evt_fetch_and_clear_all(void)
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
 #define GW_RX_WINDOW_GUARD_MS   (1800u)
-#define GW_RX_WINDOW_MAX_50_NODES_MS (110000u)
 #define GW_RX_PRESTART_MS       (500u)
 #define GW_TX_EVT_SAFETY_WAKE_MS (80u)
 #define GW_RX_EVT_SAFETY_SLACK_MS (20u)
@@ -134,6 +133,8 @@ static uint8_t s_rx_expected_nodes = 0u;
 static uint32_t s_rx_window_deadline_ms = 0u;
 static uint32_t s_rx_cycle_start_ms = 0u;
 static uint64_t s_rx_nodes_seen_mask = 0u;
+static uint64_t s_last_cycle_nodes_seen_mask = 0u;
+static bool s_last_cycle_nodes_seen_mask_valid = false;
 static uint32_t s_data_freq_hz = 0;
 static bool s_rx_cycle_minute_test = false;
 static uint32_t s_rx_cycle_stamp_sec = 0u;
@@ -248,6 +249,7 @@ static void prv_led1_sync_blink_stop(void);
 static void prv_led1_blocking_pulse_ms(uint32_t pulse_ms);
 static void prv_request_schedule_recheck_now(void);
 static bool prv_handle_boot_time_sync_beacon(void);
+bool GW_App_CopyTcpSnapshotRecord(const GW_HourRec_t* src, GW_HourRec_t* dst);
 static void prv_mark_periodic_beacon_slot_consumed_if_due(uint32_t epoch_sec);
 
 static void prv_mark_periodic_beacon_slot_consumed_if_due(uint32_t epoch_sec)
@@ -387,6 +389,57 @@ static void prv_tmr_ble_test_expire_cb(void *context)
     (void)context;
     prv_evt_set(GW_EVT_BLE_TEST_EXPIRE);
     UTIL_SEQ_SetTask(UI_TASK_BIT_GW_MAIN, 0);
+}
+
+static void prv_invalidate_node_rec(GW_NodeRec_t* r)
+{
+    if (r == NULL) {
+        return;
+    }
+
+    r->batt_lvl = UI_NODE_BATT_LVL_INVALID;
+    r->temp_c = UI_NODE_TEMP_INVALID_C;
+    r->x = 0xFFFFu;
+    r->y = 0xFFFFu;
+    r->z = 0xFFFFu;
+    r->adc = 0xFFFFu;
+    r->pulse_cnt = 0xFFFFFFFFu;
+}
+
+static void prv_sanitize_unreceived_nodes(GW_HourRec_t* rec, uint64_t rx_seen_mask)
+{
+    uint32_t i;
+
+    if (rec == NULL) {
+        return;
+    }
+
+    for (i = 0u; i < UI_MAX_NODES; i++) {
+        if ((i >= 64u) || ((rx_seen_mask & (1ULL << i)) == 0u)) {
+            prv_invalidate_node_rec(&rec->nodes[i]);
+        }
+    }
+}
+
+bool GW_App_CopyTcpSnapshotRecord(const GW_HourRec_t* src, GW_HourRec_t* dst)
+{
+    if ((src == NULL) || (dst == NULL)) {
+        return false;
+    }
+
+    *dst = *src;
+
+    if (s_last_cycle_valid && s_last_cycle_nodes_seen_mask_valid &&
+        (src->epoch_sec == s_last_cycle_rec.epoch_sec)) {
+        prv_sanitize_unreceived_nodes(dst, s_last_cycle_nodes_seen_mask);
+        return true;
+    }
+
+    if (src->epoch_sec == s_hour_rec.epoch_sec) {
+        prv_sanitize_unreceived_nodes(dst, s_rx_nodes_seen_mask);
+    }
+
+    return true;
 }
 
 static uint8_t prv_count_valid_nodes_in_rec(const GW_HourRec_t* rec)
@@ -581,13 +634,7 @@ static void prv_hour_rec_init(uint32_t epoch_sec)
     s_hour_rec.gw_volt_x10 = prv_pack_gw_volt_x10(gw_volt_x10_raw);
     s_hour_rec.gw_temp_c = prv_pack_gw_temp_c(gw_temp_x10_raw);
     for (uint32_t i = 0; i < UI_MAX_NODES; i++) {
-        s_hour_rec.nodes[i].batt_lvl = UI_NODE_BATT_LVL_INVALID;
-        s_hour_rec.nodes[i].temp_c = UI_NODE_TEMP_INVALID_C;
-        s_hour_rec.nodes[i].x = 0xFFFFu;
-        s_hour_rec.nodes[i].y = 0xFFFFu;
-        s_hour_rec.nodes[i].z = 0xFFFFu;
-        s_hour_rec.nodes[i].adc = 0xFFFFu;
-        s_hour_rec.nodes[i].pulse_cnt = 0xFFFFFFFFu;
+        prv_invalidate_node_rec(&s_hour_rec.nodes[i]);
     }
 }
 
@@ -1186,27 +1233,6 @@ static uint32_t prv_catm1_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t pe
     return (epoch_sec / period_sec);
 }
 
-static bool prv_should_request_catm1_after_cycle_close(uint32_t cycle_epoch_sec, uint32_t now_sec)
-{
-    uint32_t catm1_period = prv_get_catm1_period_sec();
-    uint32_t catm1_offset;
-    uint32_t cycle_slot_id;
-    uint32_t now_slot_id;
-
-    if (catm1_period == 0u) {
-        return false;
-    }
-
-    catm1_offset = prv_get_catm1_offset_sec();
-    cycle_slot_id = prv_catm1_slot_id_from_epoch_sec(cycle_epoch_sec, catm1_period);
-    now_slot_id = prv_catm1_slot_id_from_epoch_sec(now_sec, catm1_period);
-    if (cycle_slot_id != now_slot_id) {
-        return false;
-    }
-
-    return ((now_sec % catm1_period) >= catm1_offset);
-}
-
 static uint32_t prv_beacon_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t period_sec, uint32_t offset_sec)
 {
     if (period_sec == 0u) {
@@ -1428,16 +1454,6 @@ static uint32_t prv_get_rx_slot_timeout_ms(void)
         return 1u;
     }
     return (deadline_ms - now_ms);
-}
-
-static uint32_t prv_get_rx_window_duration_ms(uint8_t slot_cnt)
-{
-    uint32_t duration_ms = ((uint32_t)slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
-
-    if ((slot_cnt >= 50u) && (duration_ms > GW_RX_WINDOW_MAX_50_NODES_MS)) {
-        duration_ms = GW_RX_WINDOW_MAX_50_NODES_MS;
-    }
-    return duration_ms;
 }
 
 static bool prv_arm_rx_slot(void)
@@ -1971,7 +1987,6 @@ void GW_App_Process(void)
     if ((ev & GW_EVT_RADIO_RX_DONE) != 0u) {
         if (s_state == GW_STATE_RX_SLOTS) {
             bool accepted_node = false;
-            bool expected_node = false;
             uint64_t seen_bit = 0u;
             UI_NodeData_t nd;
 
@@ -1989,9 +2004,8 @@ void GW_App_Process(void)
                         r->z = ((sensor_en_mask & UI_SENSOR_EN_ICM20948) != 0u) ? nd.z : 0xFFFFu;
                         r->adc = ((sensor_en_mask & UI_SENSOR_EN_ADC) != 0u) ? nd.adc : 0xFFFFu;
                         r->pulse_cnt = ((sensor_en_mask & UI_SENSOR_EN_PULSE) != 0u) ? nd.pulse_cnt : 0xFFFFFFFFu;
-                        if ((nd.node_num < s_rx_expected_nodes) && (nd.node_num < 64u)) {
+                        if (nd.node_num < 64u) {
                             seen_bit = (1ULL << nd.node_num);
-                            expected_node = true;
                             if ((s_rx_nodes_seen_mask & seen_bit) == 0u) {
                                 prv_rx_note_node_received(nd.node_num);
                             }
@@ -2001,13 +2015,11 @@ void GW_App_Process(void)
                 }
             }
             /* NOTE: 수신 즉시 조기 종료(early-close)를 하지 않는다.
-             * max_nodes(s_rx_expected_nodes)보다 node_num이 큰 노드(예: max_nodes=1일 때
-             * node1)는 expected_node=false로 처리되어 seen_mask에 기록되지 않는다.
-             * 따라서 node0 수신 직후 early-close가 발생하면 node1의 패킷 수신 슬롯
-             * (2초 뒤)을 완전히 놓치게 된다.
-             * 대신 RX 타임아웃 경로(prv_rx_next_slot)에서 window 만료 또는
-             * prv_rx_all_expected_nodes_seen() 조건으로 사이클을 닫는다.
-             * 이 방식은 max_nodes 설정과 무관하게 윈도우 내 모든 노드를 수신한다. */
+             * seen_mask에는 실제로 받은 모든 node bit를 기록하고, cycle 종료 판정은
+             * prv_rx_all_expected_nodes_seen()에서 lower expected range만 검사한다.
+             * 따라서 max_nodes보다 큰 node_num을 받아도 조기 종료는 발생하지 않고,
+             * 윈도우 내에서 계속 수신하다가 timeout 또는 expected 범위 complete에서
+             * 사이클을 닫는다. */
             (void)prv_rearm_current_rx_slot();
             if (accepted_node) {
                 prv_led1_blocking_pulse_ms(GW_RADIO_LED_PULSE_MS);
@@ -2223,7 +2235,7 @@ void GW_App_Process(void)
              * 그래서 RX를 미리 arm 해도 slot timeout과 cycle 종료 경계는 원래 20/22/...초 기준으로 계산된다. */
             s_rx_cycle_start_ms = HAL_GetTick() + rx_arm_lead_ms;
             s_rx_nodes_seen_mask = 0u;
-            s_rx_window_deadline_ms = s_rx_cycle_start_ms + prv_get_rx_window_duration_ms(s_slot_cnt);
+            s_rx_window_deadline_ms = s_rx_cycle_start_ms + ((uint32_t)s_slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
             if (UI_BLE_IsActive()) {
                 UI_BLE_Disable();
             }
@@ -2394,10 +2406,14 @@ void GW_App_Init(void)
     s_rx_cycle_start_ms = 0u;
     s_rx_expected_nodes = 0u;
     s_rx_nodes_seen_mask = 0u;
+    s_last_cycle_nodes_seen_mask = 0u;
+    s_last_cycle_nodes_seen_mask_valid = false;
     s_catm1_retry_not_before_ms = 0u;
     prv_cancel_pending_beacon_burst();
     s_beacon_recovery_mode = false;
     s_last_cycle_valid = false;
+    s_last_cycle_nodes_seen_mask = 0u;
+    s_last_cycle_nodes_seen_mask_valid = false;
     s_last_cycle_minute_id = 0u;
     s_last_save_minute_id = 0xFFFFFFFFu;
     s_catm1_uplink_pending = false;
@@ -2574,19 +2590,30 @@ void GW_Radio_OnTxTimeout(void)
 
 static void prv_close_rx_cycle_and_commit(void)
 {
+    uint64_t rx_seen_mask = s_rx_nodes_seen_mask;
+
     UI_Radio_EnterSleep();
     s_state = GW_STATE_IDLE;
     UI_LPM_UnlockStop();
-    s_rx_window_deadline_ms = 0u;
-    s_rx_cycle_start_ms = 0u;
-    s_rx_expected_nodes = 0u;
-    s_rx_nodes_seen_mask = 0u;
 
     if (s_rx_cycle_stamp_sec != 0u) {
         s_hour_rec.epoch_sec = s_rx_cycle_stamp_sec;
     } else {
         s_hour_rec.epoch_sec = prv_get_current_cycle_timestamp_sec();
     }
+
+    /* 현재 RX cycle에서 실제로 받은 노드만 남기고, 미수신 노드 slot은
+     * invalid marker로 다시 지운다. 이렇게 해야 이전 cycle 값이나 부분 수신 값이
+     * TCP payload/flash backlog로 넘어가지 않는다. */
+    prv_sanitize_unreceived_nodes(&s_hour_rec, rx_seen_mask);
+    s_last_cycle_nodes_seen_mask = rx_seen_mask;
+    s_last_cycle_nodes_seen_mask_valid = true;
+
+    s_rx_window_deadline_ms = 0u;
+    s_rx_cycle_start_ms = 0u;
+    s_rx_expected_nodes = 0u;
+    s_rx_nodes_seen_mask = 0u;
+
     prv_mark_cycle_complete(&s_hour_rec);
     prv_update_beacon_recovery_mode_from_rec(&s_hour_rec);
     if (s_rx_cycle_minute_test) {
@@ -2602,21 +2629,12 @@ static void prv_close_rx_cycle_and_commit(void)
             }
         }
     } else {
-        uint32_t now_sec;
         bool saved_ok = prv_save_hour_rec_verified(&s_hour_rec);
         prv_flash_tx_note_saved(saved_ok);
         GW_Storage_PurgeOldFiles(s_hour_rec.epoch_sec);
         prv_flash_tx_resync_after_storage_change();
         s_rx_cycle_minute_test = false;
         s_rx_cycle_stamp_sec = 0u;
-
-        now_sec = UI_Time_NowSec2016();
-        if (prv_should_request_catm1_after_cycle_close(s_hour_rec.epoch_sec, now_sec)) {
-            prv_request_catm1_uplink_immediate();
-            if (prv_run_catm1_uplink_now()) {
-                return;
-            }
-        }
     }
     prv_schedule_wakeup();
 }
