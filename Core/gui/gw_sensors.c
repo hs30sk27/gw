@@ -140,44 +140,77 @@ static bool prv_read_temp_x10(uint16_t vdd_mv, int16_t* out_temp_x10)
 #endif
 }
 
-bool GW_Sensors_MeasureGw(uint16_t* volt_x10, int16_t* temp_x10)
+static bool prv_read_batt_lvl_gpio(uint8_t* out_batt_lvl)
 {
-    if (volt_x10 == NULL || temp_x10 == NULL) return false;
-
-    /* 기본값은 호출부에서 0xFFFF 유지 권장 */
-
-#if !defined(HAL_ADC_MODULE_ENABLED)
-    return false;
-#else
-    prv_set_adc_en(true);
-    prv_ensure_adc_init();
-
-    uint16_t vdd_mv = 0;
-    if (!prv_read_vdd_mv(&vdd_mv) || vdd_mv == 0u)
+#if defined(BATT_LVL_Pin) && defined(BATT_LVL_GPIO_Port)
+    if (out_batt_lvl == NULL)
     {
-        (void)HAL_ADC_DeInit(&hadc);
-        prv_set_adc_en(false);
         return false;
     }
 
-    /* 0.1V 단위 */
-    *volt_x10 = (uint16_t)((vdd_mv + 50u) / 100u);
+    *out_batt_lvl = (HAL_GPIO_ReadPin(BATT_LVL_GPIO_Port, BATT_LVL_Pin) == UI_BATT_LVL_NORMAL_GPIO_STATE)
+                  ? UI_NODE_BATT_LVL_NORMAL
+                  : UI_NODE_BATT_LVL_LOW;
+    return true;
+#else
+    (void)out_batt_lvl;
+    return false;
+#endif
+}
 
-    int16_t t_x10 = (int16_t)0xFFFF;
-    if (!prv_read_temp_x10(vdd_mv, &t_x10))
+static uint16_t prv_batt_lvl_to_compat_gw_volt_x10(uint8_t batt_lvl)
+{
+    if (batt_lvl == UI_NODE_BATT_LVL_NORMAL)
     {
-        /* 온도 실패는 허용: 전압만이라도 제공 */
-        *temp_x10 = (int16_t)0xFFFF;
+        return UI_GW_BATT_GPIO_NORMAL_REPR_X10;
     }
-    else
+    if (batt_lvl == UI_NODE_BATT_LVL_LOW)
     {
-        *temp_x10 = t_x10;
+        return UI_GW_BATT_GPIO_LOW_REPR_X10;
+    }
+    return 0xFFFFu;
+}
+
+bool GW_Sensors_MeasureGw(uint16_t* volt_x10, int16_t* temp_x10)
+{
+    bool have_any = false;
+    uint8_t batt_lvl = UI_NODE_BATT_LVL_INVALID;
+
+    if ((volt_x10 == NULL) || (temp_x10 == NULL))
+    {
+        return false;
+    }
+
+    *volt_x10 = 0xFFFFu;
+    *temp_x10 = (int16_t)0xFFFF;
+
+    /* 배터리 레벨은 ADC가 아니라 BATT_LVL GPIO 입력을 그대로 사용한다. */
+    if (prv_read_batt_lvl_gpio(&batt_lvl))
+    {
+        *volt_x10 = prv_batt_lvl_to_compat_gw_volt_x10(batt_lvl);
+        have_any = true;
+    }
+
+#if defined(HAL_ADC_MODULE_ENABLED)
+    /* 온도만 내부 ADC 사용 */
+    prv_set_adc_en(true);
+    prv_ensure_adc_init();
+
+    uint16_t vdd_mv = 0u;
+    if (prv_read_vdd_mv(&vdd_mv) && (vdd_mv != 0u))
+    {
+        int16_t t_x10 = (int16_t)0xFFFF;
+        if (prv_read_temp_x10(vdd_mv, &t_x10))
+        {
+            *temp_x10 = t_x10;
+            have_any = true;
+        }
     }
 
     /* 전류 최소: 측정 끝나면 ADC 끄기 */
     (void)HAL_ADC_DeInit(&hadc);
     prv_set_adc_en(false);
-
-    return true;
 #endif
+
+    return have_any;
 }

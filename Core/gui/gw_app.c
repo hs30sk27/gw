@@ -121,6 +121,7 @@ static uint32_t prv_evt_fetch_and_clear_all(void)
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
 #define GW_RX_WINDOW_GUARD_MS   (1800u)
+#define GW_RX_WINDOW_MAX_50_NODES_MS (110000u)
 #define GW_RX_PRESTART_MS       (500u)
 #define GW_TX_EVT_SAFETY_WAKE_MS (80u)
 #define GW_RX_EVT_SAFETY_SLACK_MS (20u)
@@ -1185,6 +1186,27 @@ static uint32_t prv_catm1_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t pe
     return (epoch_sec / period_sec);
 }
 
+static bool prv_should_request_catm1_after_cycle_close(uint32_t cycle_epoch_sec, uint32_t now_sec)
+{
+    uint32_t catm1_period = prv_get_catm1_period_sec();
+    uint32_t catm1_offset;
+    uint32_t cycle_slot_id;
+    uint32_t now_slot_id;
+
+    if (catm1_period == 0u) {
+        return false;
+    }
+
+    catm1_offset = prv_get_catm1_offset_sec();
+    cycle_slot_id = prv_catm1_slot_id_from_epoch_sec(cycle_epoch_sec, catm1_period);
+    now_slot_id = prv_catm1_slot_id_from_epoch_sec(now_sec, catm1_period);
+    if (cycle_slot_id != now_slot_id) {
+        return false;
+    }
+
+    return ((now_sec % catm1_period) >= catm1_offset);
+}
+
 static uint32_t prv_beacon_slot_id_from_epoch_sec(uint32_t epoch_sec, uint32_t period_sec, uint32_t offset_sec)
 {
     if (period_sec == 0u) {
@@ -1406,6 +1428,16 @@ static uint32_t prv_get_rx_slot_timeout_ms(void)
         return 1u;
     }
     return (deadline_ms - now_ms);
+}
+
+static uint32_t prv_get_rx_window_duration_ms(uint8_t slot_cnt)
+{
+    uint32_t duration_ms = ((uint32_t)slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
+
+    if ((slot_cnt >= 50u) && (duration_ms > GW_RX_WINDOW_MAX_50_NODES_MS)) {
+        duration_ms = GW_RX_WINDOW_MAX_50_NODES_MS;
+    }
+    return duration_ms;
 }
 
 static bool prv_arm_rx_slot(void)
@@ -2191,7 +2223,7 @@ void GW_App_Process(void)
              * 그래서 RX를 미리 arm 해도 slot timeout과 cycle 종료 경계는 원래 20/22/...초 기준으로 계산된다. */
             s_rx_cycle_start_ms = HAL_GetTick() + rx_arm_lead_ms;
             s_rx_nodes_seen_mask = 0u;
-            s_rx_window_deadline_ms = s_rx_cycle_start_ms + ((uint32_t)s_slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
+            s_rx_window_deadline_ms = s_rx_cycle_start_ms + prv_get_rx_window_duration_ms(s_slot_cnt);
             if (UI_BLE_IsActive()) {
                 UI_BLE_Disable();
             }
@@ -2570,12 +2602,21 @@ static void prv_close_rx_cycle_and_commit(void)
             }
         }
     } else {
+        uint32_t now_sec;
         bool saved_ok = prv_save_hour_rec_verified(&s_hour_rec);
         prv_flash_tx_note_saved(saved_ok);
         GW_Storage_PurgeOldFiles(s_hour_rec.epoch_sec);
         prv_flash_tx_resync_after_storage_change();
         s_rx_cycle_minute_test = false;
         s_rx_cycle_stamp_sec = 0u;
+
+        now_sec = UI_Time_NowSec2016();
+        if (prv_should_request_catm1_after_cycle_close(s_hour_rec.epoch_sec, now_sec)) {
+            prv_request_catm1_uplink_immediate();
+            if (prv_run_catm1_uplink_now()) {
+                return;
+            }
+        }
     }
     prv_schedule_wakeup();
 }

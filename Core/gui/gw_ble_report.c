@@ -80,6 +80,23 @@ static void prv_format_batt(char* out, size_t out_sz, uint8_t batt_lvl)
                    (batt_lvl == UI_NODE_BATT_LVL_NORMAL) ? "Y" : "N");
 }
 
+static void prv_format_gw_batt_like_tcp(char* out, size_t out_sz, uint8_t gw_volt_x10)
+{
+    if ((out == NULL) || (out_sz == 0u))
+    {
+        return;
+    }
+
+    if (gw_volt_x10 == 0xFFu)
+    {
+        (void)snprintf(out, out_sz, "NA");
+        return;
+    }
+
+    (void)snprintf(out, out_sz, "%s",
+                   (gw_volt_x10 >= UI_NODE_BATT_LOW_THRESHOLD_X10) ? "3.5" : "LOW");
+}
+
 static void prv_format_temp_c(char* out, size_t out_sz, int8_t temp_c)
 {
     if ((out == NULL) || (out_sz == 0u))
@@ -131,7 +148,7 @@ bool GW_BleReport_SendMinuteTestRecord(const GW_HourRec_t* rec)
                    (unsigned)valid_cnt);
     UI_UART_SendString(line);
 
-    prv_format_x10(vbuf, sizeof(vbuf), (int32_t)rec->gw_volt_x10, rec->gw_volt_x10 == 0xFFu);
+    prv_format_gw_batt_like_tcp(vbuf, sizeof(vbuf), rec->gw_volt_x10);
     prv_format_temp_c(tbuf, sizeof(tbuf), rec->gw_temp_c);
 
     (void)snprintf(line, sizeof(line),

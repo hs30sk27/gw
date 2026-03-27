@@ -183,7 +183,23 @@
 #define UI_NODE_BATT_LVL_LOW         (0u)
 #define UI_NODE_BATT_LVL_NORMAL      (1u)
 #define UI_NODE_BATT_LVL_INVALID     (0xFFu)
-#define UI_NODE_BATT_LOW_THRESHOLD_X10 (33u)   /* 3.3V 미만이면 low battery */
+#define UI_NODE_BATT_LOW_THRESHOLD_X10 (33u)   /* legacy x10 경계 / GPIO batt text 매핑에도 사용 */
+
+/* Battery level GPIO polarity & GW legacy voltage compatibility
+ * - 실제 batt 판정은 ADC가 아니라 BATT_LVL 입력 핀을 사용한다.
+ * - GW 저장 구조는 gw_volt_x10(0.1V) 필드를 그대로 쓰므로,
+ *   GPIO level을 대표값(x10)으로 매핑해 하위 호환을 유지한다.
+ * - 하드웨어가 active-low면 UI_BATT_LVL_NORMAL_GPIO_STATE를 GPIO_PIN_RESET으로 바꾸면 된다.
+ */
+#ifndef UI_BATT_LVL_NORMAL_GPIO_STATE
+#define UI_BATT_LVL_NORMAL_GPIO_STATE (GPIO_PIN_SET)
+#endif
+#ifndef UI_GW_BATT_GPIO_NORMAL_REPR_X10
+#define UI_GW_BATT_GPIO_NORMAL_REPR_X10 (UI_NODE_BATT_LOW_THRESHOLD_X10 + 2u)
+#endif
+#ifndef UI_GW_BATT_GPIO_LOW_REPR_X10
+#define UI_GW_BATT_GPIO_LOW_REPR_X10 ((UI_NODE_BATT_LOW_THRESHOLD_X10 > 0u) ? (UI_NODE_BATT_LOW_THRESHOLD_X10 - 1u) : 0u)
+#endif
 #define UI_NODE_TEMP_MIN_C           ((int8_t)-50)
 #define UI_NODE_TEMP_MAX_C           ((int8_t)100)
 #define UI_NODE_TEMP_INVALID_C       ((int8_t)-128)
