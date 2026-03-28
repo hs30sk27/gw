@@ -199,6 +199,7 @@ static int16_t s_rx_shadow_rssi = 0;
 static int8_t s_rx_shadow_snr = 0;
 
 static void prv_schedule_wakeup(void);
+static void prv_schedule_after_ms(uint32_t delay_ms);
 static void prv_arm_busy_state_safety_wakeup(uint32_t delay_ms);
 static void prv_requeue_events(uint32_t ev_mask);
 static bool prv_arm_rx_slot(void);
@@ -251,6 +252,12 @@ static void prv_led1_sync_blink_stop(void);
 static void prv_led1_blocking_pulse_ms(uint32_t pulse_ms);
 static void prv_request_schedule_recheck_now(void);
 static bool prv_handle_boot_time_sync_beacon(void);
+static void prv_request_catm1_uplink(void);
+static void prv_request_catm1_uplink_immediate(void);
+static bool prv_tcp_uplink_blocked_by_ble(void);
+static bool prv_have_any_tcp_uplink_candidate(void);
+static void prv_request_tcp_uplink_after_enable(bool immediate);
+static bool prv_restore_runtime_after_sync_wait_end(void);
 bool GW_App_CopyTcpSnapshotRecord(const GW_HourRec_t* src, GW_HourRec_t* dst);
 static void prv_mark_periodic_beacon_slot_consumed_if_due(uint32_t epoch_sec);
 
@@ -384,6 +391,12 @@ void GW_App_PrepareForDormantStop(void)
      */
     s_ble_test_session_active = false;
     s_dormant_stop_mode = false;
+
+    if (s_tcp_enabled && s_catm1_uplink_pending && s_catm1_immediate_try_pending) {
+        /* BLE OFF 직후 UI_BLE_Process()가 곧바로 STOP으로 내려갈 수 있으므로,
+         * 즉시 wake timer를 짧게 다시 걸어 CAT-M1 재시작 기회를 보장한다. */
+        prv_schedule_after_ms(1u);
+    }
 }
 
 static void prv_tmr_ble_test_expire_cb(void *context)
@@ -442,6 +455,49 @@ bool GW_App_CopyTcpSnapshotRecord(const GW_HourRec_t* src, GW_HourRec_t* dst)
     }
 
     return true;
+}
+
+
+static bool prv_tcp_uplink_blocked_by_ble(void)
+{
+#if UI_HAVE_BT_EN
+    if (!UI_BLE_IsActive()) {
+        return false;
+    }
+
+    /* 일반 짧은 BLE 세션 동안에는 CAT-M1 TCP를 바로 올리지 않는다.
+     * 대신 immediate pending 상태를 유지해서 BLE가 꺼지면 곧바로 재시도한다. */
+    return !UI_BLE_IsPersistent();
+#else
+    return false;
+#endif
+}
+
+static bool prv_have_any_tcp_uplink_candidate(void)
+{
+    if (prv_flash_tx_pending_count() > 0u) {
+        return true;
+    }
+    if (s_last_cycle_valid) {
+        return true;
+    }
+    return (s_hour_rec.epoch_sec != 0u);
+}
+
+static void prv_request_tcp_uplink_after_enable(bool immediate)
+{
+    if (!s_tcp_enabled) {
+        return;
+    }
+    if (!prv_have_any_tcp_uplink_candidate()) {
+        return;
+    }
+
+    if (immediate) {
+        prv_request_catm1_uplink_immediate();
+    } else {
+        prv_request_catm1_uplink();
+    }
 }
 
 static uint8_t prv_count_valid_nodes_in_rec(const GW_HourRec_t* rec)
@@ -1009,8 +1065,6 @@ static uint32_t prv_flash_tx_pending_count(void)
     uint32_t tail = GW_Storage_GetTotalRecordCount();
 
     if (!s_tcp_enabled) {
-        s_flash_tx_boot_tail_index = tail;
-        s_flash_tx_next_send_index = tail;
         return 0u;
     }
     if (s_flash_tx_boot_tail_index > tail) {
@@ -1104,7 +1158,8 @@ static void prv_abort_pending_tcp_uplink_state(void)
     s_catm1_retry_not_before_ms = 0u;
     s_last_catm1_slot_id = 0xFFFFFFFFu;
     s_last_minute_test_uplink_minute_id = 0xFFFFFFFFu;
-    s_last_live_uplink_epoch_sec = 0xFFFFFFFFu;
+    /* 마지막 성공 uplink stamp는 유지해서 OFF->ON 전환 뒤에도
+     * flash head 중복 record를 건너뛸 수 있게 둔다. */
     s_last_2m_prep_slot_id = 0xFFFFFFFFu;
 }
 
@@ -1123,8 +1178,14 @@ static void prv_reset_tcp_live_record_state(void)
 
 static void prv_apply_tcp_mode_change(bool enabled)
 {
-    if (s_tcp_enabled == enabled) {
+    bool state_changed = (s_tcp_enabled != enabled);
+
+    if (!state_changed) {
+        if (enabled) {
+            prv_request_tcp_uplink_after_enable(true);
+        }
         if (s_inited) {
+            prv_exit_dormant_stop_mode();
             prv_schedule_wakeup();
         }
         return;
@@ -1132,10 +1193,12 @@ static void prv_apply_tcp_mode_change(bool enabled)
 
     s_tcp_enabled = enabled;
     prv_abort_pending_tcp_uplink_state();
-    prv_flash_tx_reset_to_tail();
 
     if (enabled) {
-        prv_reset_tcp_live_record_state();
+        if (!prv_have_any_tcp_uplink_candidate()) {
+            prv_reset_tcp_live_record_state();
+        }
+        prv_request_tcp_uplink_after_enable(true);
     }
 
     if (!s_inited) {
@@ -1388,6 +1451,10 @@ static bool prv_run_catm1_uplink_now(void)
         return false;
     }
     if (GW_Catm1_IsBusy()) {
+        return false;
+    }
+    if (prv_tcp_uplink_blocked_by_ble()) {
+        prv_schedule_wakeup();
         return false;
     }
 
@@ -1762,12 +1829,41 @@ static void prv_cleanup_sync_wait_context(void)
     prv_reset_rx_cycle_state();
 }
 
+static bool prv_restore_runtime_after_sync_wait_end(void)
+{
+    if (!s_inited) {
+        return false;
+    }
+
+    /* sync wait 종료 뒤에는 TCP가 OFF 상태였더라도 자동으로 ON 복구하고,
+     * 현재/직전 snapshot 또는 flash backlog가 있으면 곧바로 uplink를 재개한다. */
+    prv_apply_tcp_mode_change(true);
+
+    if (!(s_tcp_enabled && s_catm1_uplink_pending && s_catm1_immediate_try_pending)) {
+        return false;
+    }
+
+    if (prv_tcp_uplink_blocked_by_ble()) {
+        prv_schedule_after_ms(GW_CATM1_PENDING_POLL_MS);
+        return false;
+    }
+
+    prv_request_schedule_recheck_now();
+    return true;
+}
+
 static void prv_finish_sync_wait_and_stop(void)
 {
+    bool catm1_restart_now;
+
     prv_cleanup_sync_wait_context();
     UI_BLE_SetPersistent(false);
     if (UI_BLE_IsActive()) {
         UI_BLE_Disable();
+    }
+    catm1_restart_now = prv_restore_runtime_after_sync_wait_end();
+    if (catm1_restart_now) {
+        return;
     }
     UI_LPM_EnterStopNow();
 }
@@ -2447,7 +2543,11 @@ static void prv_schedule_wakeup(void)
     if (s_catm1_uplink_pending && s_catm1_immediate_try_pending) {
         uint64_t next_uplink;
 
-        if (prv_is_minute_test_active() && (((uint32_t)(now_centi / 100u) % 60u) < 40u)) {
+        if (prv_tcp_uplink_blocked_by_ble()) {
+            /* BLE 명령 세션이 살아있는 동안에는 10ms busy polling을 하지 않고
+             * 1초 간격으로만 재확인한다. BLE가 꺼지면 즉시 uplink가 이어진다. */
+            next_uplink = now_centi + (((uint64_t)GW_CATM1_PENDING_POLL_MS + 9u) / 10u);
+        } else if (prv_is_minute_test_active() && (((uint32_t)(now_centi / 100u) % 60u) < 40u)) {
             next_uplink = prv_next_test50_centi(now_centi);
         } else {
             next_uplink = now_centi + 1u;
