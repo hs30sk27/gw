@@ -121,8 +121,8 @@ static uint32_t prv_evt_fetch_and_clear_all(void)
 
 #define GW_FLASH_TX_BACKLOG_MAX (24u * 5u)
 #define GW_BLE_TEST_SESSION_MS  (60u * 60u * 1000u)
-#define GW_RX_WINDOW_GUARD_MS   (1800u)
-#define GW_RX_PRESTART_MS       (500u)
+#define GW_RX_WINDOW_GUARD_MS   (2000u)
+#define GW_RX_PRESTART_MS       (1000u)
 #define GW_TX_EVT_SAFETY_WAKE_MS (80u)
 #define GW_RX_EVT_SAFETY_SLACK_MS (20u)
 
@@ -953,6 +953,8 @@ static uint32_t prv_get_rx_start_offset_sec(void)
         return 20u;
     }
     /* 5분 이상 주기에서는 각 cycle의 +01분00초에 ND RX를 시작한다.
+     * RX arm은 nominal slot보다 1000ms 먼저 올리고,
+     * 최대 수신 대기 종료는 50노드 기준 cycle +02분42초를 넘지 않게 맞춘다.
      * 1분/2분 모드는 각각 +20초에 맞춘다. */
     return UI_GW_RX_START_OFFSET_S;
 }
@@ -1421,7 +1423,7 @@ static uint32_t prv_get_catm1_period_sec(void)
 
 static uint32_t prv_get_catm1_offset_sec(void)
 {
-    /* 2분 모드는 +01분20초, 5분 이상 주기는 +03분00초에 TCP uplink를 시도한다. */
+    /* 2분 모드는 +01분20초, 5분 이상 주기는 항상 cycle anchor +03분00초에 TCP uplink를 시도한다. */
     return prv_is_two_minute_mode_active() ? 80u : UI_CATM1_PERIODIC_OFFSET_S;
 }
 
@@ -2470,6 +2472,9 @@ void GW_App_Process(void)
 
             s_data_freq_hz = UI_RF_GetDataFreqHz((uint32_t)(rx_event_centi / 100u), hop_period, 0u);
             s_slot_cnt = (uint8_t)cfg->max_nodes;
+            if (s_slot_cnt > UI_MAX_NODES) {
+                s_slot_cnt = UI_MAX_NODES;
+            }
             if (s_test_mode && (s_slot_cnt > UI_TESTMODE_MAX_NODES)) {
                 s_slot_cnt = UI_TESTMODE_MAX_NODES;
             }
@@ -2481,6 +2486,7 @@ void GW_App_Process(void)
              * 그래서 RX를 미리 arm 해도 slot timeout과 cycle 종료 경계는 원래 20/22/...초 기준으로 계산된다. */
             s_rx_cycle_start_ms = HAL_GetTick() + rx_arm_lead_ms;
             s_rx_nodes_seen_mask = 0u;
+            /* 2초 슬롯 * 최대 50노드 + 2초 guard = 총 102초 -> cycle +02:42에서 RX 종료 */
             s_rx_window_deadline_ms = s_rx_cycle_start_ms + ((uint32_t)s_slot_cnt * UI_SLOT_DURATION_MS) + GW_RX_WINDOW_GUARD_MS;
             if (UI_BLE_IsActive()) {
                 UI_BLE_Disable();
@@ -2646,6 +2652,7 @@ void GW_App_Init(void)
     GW_Catm1_Init();
     prv_led1(false);
     s_state = GW_STATE_IDLE;
+    s_tcp_enabled = true; /* power-on 기본값은 항상 TCP ON */
     prv_evt_clear_all();
     s_beacon_counter = 0;
     s_test_mode = false;
