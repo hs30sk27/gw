@@ -254,6 +254,8 @@ static void prv_request_schedule_recheck_now(void);
 static bool prv_handle_boot_time_sync_beacon(void);
 static void prv_request_catm1_uplink(void);
 static void prv_request_catm1_uplink_immediate(void);
+static void prv_request_ble_stop_for_immediate_tcp_uplink(void);
+static bool prv_have_immediate_tcp_uplink_request(void);
 static bool prv_tcp_uplink_blocked_by_ble(void);
 static bool prv_have_any_tcp_uplink_candidate(void);
 static void prv_request_tcp_uplink_after_enable(bool immediate);
@@ -386,17 +388,27 @@ void GW_App_PrepareForDormantStop(void)
      *
      * 여기서는 BLE test session 상태만 정리하고 GW scheduler/radio state는 유지한다.
      * - TX/RX/sync 진행 중이면 UI_LPM lock 때문에 즉시 STOP 진입이 막힌다.
-     * - 진행 중이 아니면 UI_BLE_Process()의 UI_LPM_EnterStopNow()가 그대로 STOP에 들어가되,
-     *   RTC/UTIL timer 스케줄은 유지되어 다음 정시 beacon/RX/TCP가 계속 동작한다.
+     * - 진행 중이 아니면 UI_BLE_Process()가 이 상태를 보고 same-loop에서
+     *   GW_App_Process()를 바로 다시 태워 CAT-M1을 시작할 수 있다.
      */
     s_ble_test_session_active = false;
     s_dormant_stop_mode = false;
 
-    if (s_tcp_enabled && s_catm1_uplink_pending && s_catm1_immediate_try_pending) {
-        /* BLE OFF 직후 UI_BLE_Process()가 곧바로 STOP으로 내려갈 수 있으므로,
-         * 즉시 wake timer를 짧게 다시 걸어 CAT-M1 재시작 기회를 보장한다. */
+    if (prv_have_immediate_tcp_uplink_request()) {
+        /* BLE OFF 직후에는 same-loop 재평가를 먼저 시도하고,
+         * 그 직후 STOP으로 내려가더라도 놓치지 않게 1ms wake를 backup으로 둔다. */
+        prv_request_schedule_recheck_now();
         prv_schedule_after_ms(1u);
     }
+}
+
+bool GW_App_ShouldStayAwakeAfterBleOff(void)
+{
+    if (!s_inited) {
+        return false;
+    }
+
+    return prv_have_immediate_tcp_uplink_request();
 }
 
 static void prv_tmr_ble_test_expire_cb(void *context)
@@ -498,6 +510,46 @@ static void prv_request_tcp_uplink_after_enable(bool immediate)
     } else {
         prv_request_catm1_uplink();
     }
+}
+
+static bool prv_have_immediate_tcp_uplink_request(void)
+{
+    if (!s_tcp_enabled) {
+        return false;
+    }
+    if (!s_catm1_uplink_pending || !s_catm1_immediate_try_pending) {
+        return false;
+    }
+    if (s_state != GW_STATE_IDLE) {
+        return false;
+    }
+    if (s_sync_wait_deadline_ms != 0u) {
+        return false;
+    }
+    if (s_dormant_stop_mode) {
+        return false;
+    }
+    return true;
+}
+
+static void prv_request_ble_stop_for_immediate_tcp_uplink(void)
+{
+#if UI_HAVE_BT_EN
+    if (!prv_have_immediate_tcp_uplink_request()) {
+        return;
+    }
+    if (!UI_BLE_IsActive()) {
+        return;
+    }
+    if (UI_BLE_IsPersistent()) {
+        return;
+    }
+
+    /* 일반 BLE 명령 세션은 CAT-M1 TCP와 상호배제이므로,
+     * TCP ON을 받은 경우에는 BLE를 먼저 정리해서 CAT-M1 시작을 막지 않게 한다.
+     * RequestStopNow는 defer 처리라서 현재 명령 응답(OK)을 보낸 뒤에 종료된다. */
+    UI_BLE_RequestStopNow();
+#endif
 }
 
 static uint8_t prv_count_valid_nodes_in_rec(const GW_HourRec_t* rec)
@@ -1183,10 +1235,15 @@ static void prv_apply_tcp_mode_change(bool enabled)
     if (!state_changed) {
         if (enabled) {
             prv_request_tcp_uplink_after_enable(true);
+            prv_request_ble_stop_for_immediate_tcp_uplink();
         }
         if (s_inited) {
             prv_exit_dormant_stop_mode();
-            prv_schedule_wakeup();
+            if (enabled) {
+                prv_request_schedule_recheck_now();
+            } else {
+                prv_schedule_wakeup();
+            }
         }
         return;
     }
@@ -1199,6 +1256,7 @@ static void prv_apply_tcp_mode_change(bool enabled)
             prv_reset_tcp_live_record_state();
         }
         prv_request_tcp_uplink_after_enable(true);
+        prv_request_ble_stop_for_immediate_tcp_uplink();
     }
 
     if (!s_inited) {
@@ -1206,7 +1264,11 @@ static void prv_apply_tcp_mode_change(bool enabled)
     }
 
     prv_exit_dormant_stop_mode();
-    prv_schedule_wakeup();
+    if (enabled) {
+        prv_request_schedule_recheck_now();
+    } else {
+        prv_schedule_wakeup();
+    }
 }
 
 static bool prv_save_hour_rec_verified(const GW_HourRec_t* rec)

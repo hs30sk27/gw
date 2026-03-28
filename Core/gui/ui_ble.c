@@ -193,7 +193,10 @@ void UI_BLE_Process(void)
     {
         UI_BLE_Disable();
         GW_App_PrepareForDormantStop();
-        UI_LPM_EnterStopNow();
+        if (!GW_App_ShouldStayAwakeAfterBleOff())
+        {
+            UI_LPM_EnterStopNow();
+        }
         return;
     }
 
@@ -208,8 +211,11 @@ void UI_BLE_Process(void)
         {
             UI_BLE_Disable();
             GW_App_PrepareForDormantStop();
-            UI_LPM_EnterStopNow();
-            /* 다른 이벤트(LED 정리 등)도 처리할 수 있으므로 return 하지 않음 */
+            if (!GW_App_ShouldStayAwakeAfterBleOff())
+            {
+                UI_LPM_EnterStopNow();
+            }
+            return;
         }
     }
 

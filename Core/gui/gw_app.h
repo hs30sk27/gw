@@ -30,6 +30,9 @@ void GW_App_Process(void);
 /* BLE END/KEY로 강제 stop 진입할 때 GW 주기 wake source를 정리 */
 void GW_App_PrepareForDormantStop(void);
 
+/* BLE가 막 꺼진 직후에도 즉시 TCP uplink를 시작해야 하면 true */
+bool GW_App_ShouldStayAwakeAfterBleOff(void);
+
 /* GW TCP ON/OFF runtime gate */
 bool GW_App_IsTcpEnabled(void);
 
